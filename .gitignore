@@ -1,2 +1,3 @@
 node_modules/
-.news-agent/
+.ask-agent/
+dagger-output/
