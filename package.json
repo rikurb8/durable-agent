@@ -1,0 +1,18 @@
+{
+  "name": "news-reader",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node news-agent.ts",
+    "check": "node check.ts",
+    "test": "node --test research.test.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "^1.1.0",
+    "@earendil-works/pi-ai": "^1.1.0",
+    "@earendil-works/pi-codemode": "1.1.0",
+    "@earendil-works/pi-coding-agent": "^1.1.0",
+    "@earendil-works/pi-durable": "^1.1.0",
+    "@earendil-works/pi-mcp": "^1.1.0"
+  }
+}
