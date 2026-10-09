@@ -13,13 +13,20 @@ import { parseRequest, selectSubmission } from "./session.ts";
 
 test("request parsing preserves legacy prompts and validates idempotent/resume forms", () => {
 	assert.equal(parseRequest(["research", "batteries"]).task, "research batteries");
-	assert.deepEqual(parseRequest(["--request-id", "r1", "research"]), { requestId: "r1", task: "research" });
-	assert.deepEqual(parseRequest(["--resume", "r1"]), { requestId: "r1" });
-	assert.deepEqual(parseRequest(["--request-id=r1", "--", "--literal prompt"]), { requestId: "r1", task: "--literal prompt" });
-	for (const args of [[], ["--resume", ""], ["--request-id", "../x", "task"], ["--resume", "r1", "task"], ["--resume", "r1", "--request-id", "r2"], ["--unknown"]]) {
+	assert.deepEqual(parseRequest(["--request-id", "r1", "research"]), { requestId: "r1", mode: "prompt", task: "research", verbosity: "normal" });
+	assert.deepEqual(parseRequest(["--resume", "r1"]), { requestId: "r1", mode: "resume", verbosity: "normal" });
+	assert.deepEqual(parseRequest(["--request-id=r1", "--", "--literal prompt"]), { requestId: "r1", mode: "prompt", task: "--literal prompt", verbosity: "normal" });
+	assert.equal(parseRequest(["-vv", "research"]).verbosity, "debug");
+	assert.equal(parseRequest(["--verbose", "--quiet", "research"]).verbosity, "quiet");
+	// No prompt and no --resume is the interactive chat; -q still selects its verbosity.
+	assert.equal(parseRequest([]).mode, "chat");
+	assert.equal(parseRequest(["-q"]).mode, "chat");
+	assert.equal(parseRequest(["-q"]).verbosity, "quiet");
+	for (const args of [["--resume", ""], ["--request-id", "../x", "task"], ["--resume", "r1", "task"], ["--resume", "r1", "--request-id", "r2"], ["--unknown"]]) {
 		assert.throws(() => parseRequest(args));
 	}
 	assert.throws(() => parseRequest(["research"], true), /require --request-id/);
+	assert.throws(() => parseRequest(["--request-id", "r1"], true), /usage:/);
 });
 
 test("resume never creates input; repeated IDs reuse a result and reject different prompts", async () => {
@@ -30,18 +37,18 @@ test("resume never creates input; repeated IDs reuse a result and reject differe
 	const harness = await Harness.open(new MemoryStorage(), { models, registry: createRegistry() }, BACKGROUND_CONTEXT);
 	try {
 		const root = await harness.root(BACKGROUND_CONTEXT, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
-		await assert.rejects(selectSubmission(harness, root, { requestId: "unknown" }), /Unknown request/);
+		await assert.rejects(selectSubmission(harness, root, { requestId: "unknown", mode: "resume" }), /Unknown request/);
 		assert.equal((await root.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items.length, 0);
-		const request = { requestId: "r1", task: "First question" };
+		const request = { requestId: "r1", mode: "prompt", task: "First question", verbosity: "normal" } as const;
 		const first = await selectSubmission(harness, root, request);
 		const answer = await first.wait(BACKGROUND_CONTEXT);
 		assert.equal(answer.status, "done");
-		await (await selectSubmission(harness, root, { requestId: "r2", task: "Second question" })).wait(BACKGROUND_CONTEXT);
+		await (await selectSubmission(harness, root, { requestId: "r2", mode: "prompt", task: "Second question" })).wait(BACKGROUND_CONTEXT);
 		const again = await selectSubmission(harness, root, request);
 		assert.equal(again.id, first.id);
 		assert.deepEqual(await again.wait(BACKGROUND_CONTEXT), answer);
-		assert.equal((await selectSubmission(harness, root, { requestId: "r1" })).id, first.id);
-		await assert.rejects(selectSubmission(harness, root, { requestId: "r1", task: "Different question" }), /different prompt/);
+		assert.equal((await selectSubmission(harness, root, { requestId: "r1", mode: "resume" })).id, first.id);
+		await assert.rejects(selectSubmission(harness, root, { requestId: "r1", mode: "prompt", task: "Different question" }), /different prompt/);
 		assert.equal(faux.state.callCount, 2);
 	} finally {
 		await harness.close(BACKGROUND_CONTEXT);
@@ -59,11 +66,11 @@ test("terminal failures stay terminal on resume; a new ID can continue with save
 	const harness = await Harness.open(new MemoryStorage(), { models, registry: createRegistry(), settings: { retry: { maxRetries: 0 } } }, BACKGROUND_CONTEXT);
 	try {
 		const root = await harness.root(BACKGROUND_CONTEXT, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
-		const first = await selectSubmission(harness, root, { requestId: "failed", task: "Research" });
+		const first = await selectSubmission(harness, root, { requestId: "failed", mode: "prompt", task: "Research" });
 		assert.equal((await first.wait(BACKGROUND_CONTEXT)).status, "unanswered");
-		assert.equal((await (await selectSubmission(harness, root, { requestId: "failed" })).wait(BACKGROUND_CONTEXT)).status, "unanswered");
+		assert.equal((await (await selectSubmission(harness, root, { requestId: "failed", mode: "resume" })).wait(BACKGROUND_CONTEXT)).status, "unanswered");
 		assert.equal(faux.state.callCount, 1);
-		assert.equal((await (await selectSubmission(harness, root, { requestId: "retry", task: "Continue the previous research" })).wait(BACKGROUND_CONTEXT)).status, "done");
+		assert.equal((await (await selectSubmission(harness, root, { requestId: "retry", mode: "prompt", task: "Continue the previous research" })).wait(BACKGROUND_CONTEXT)).status, "done");
 	} finally {
 		await harness.close(BACKGROUND_CONTEXT);
 	}

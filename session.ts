@@ -2,20 +2,24 @@ import { randomUUID } from "node:crypto";
 import { parseArgs } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { InboxDoc, UserEntry, type Conversation, type Harness, type InboxItem } from "@earendil-works/pi-durable";
+import { resolveVerbosity, VERBOSITY_OPTIONS, type Verbosity } from "./verbosity.ts";
 
-export type ResearchRequest = { requestId: string; task?: string };
+export type ResearchRequest = {
+	requestId: string;
+	/** `prompt` submits once, `resume` only waits, `chat` reads prompts from stdin. */
+	mode: "prompt" | "resume" | "chat";
+	task?: string;
+	verbosity: Verbosity;
+};
 
 export function parseRequest(args: string[], requireId = false): ResearchRequest {
 	const { values, positionals } = parseArgs({
 		args, allowPositionals: true,
-		options: { "request-id": { type: "string" }, resume: { type: "string" } },
+		options: { "request-id": { type: "string" }, resume: { type: "string" }, ...VERBOSITY_OPTIONS },
 	});
 	const task = positionals.join(" ").trim();
 	if (values.resume !== undefined && (values["request-id"] !== undefined || task !== "")) {
 		throw new Error("Use --resume <request-id> without a prompt or --request-id.");
-	}
-	if (values.resume === undefined && task === "") {
-		throw new Error('usage: [--request-id <id>] "<task>" | --resume <id>');
 	}
 	const suppliedId = values.resume ?? values["request-id"];
 	if (requireId && suppliedId === undefined) throw new Error("Dagger runs require --request-id <id> or --resume <id>.");
@@ -23,7 +27,10 @@ export function parseRequest(args: string[], requireId = false): ResearchRequest
 	if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(requestId)) {
 		throw new Error("Request ID must be 1–128 letters, digits, dots, underscores or hyphens, starting with a letter or digit.");
 	}
-	return values.resume === undefined ? { requestId, task } : { requestId };
+	// No prompt and no --resume is the interactive session; --request-id only seeds its first turn.
+	const mode = values.resume !== undefined ? "resume" : task === "" ? "chat" : "prompt";
+	if (mode === "chat" && requireId) throw new Error('usage: --request-id <id> "<task>" | --resume <id>');
+	return { requestId, mode, verbosity: resolveVerbosity(values), ...(mode === "prompt" ? { task } : {}) };
 }
 
 /** Resolve a request before enabling recovery, so typos never start unrelated work. */

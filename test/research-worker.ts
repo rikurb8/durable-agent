@@ -70,7 +70,7 @@ const harness = await Harness.open(await openNodeSqliteStorage(join(directory, "
 }, BACKGROUND_CONTEXT);
 try {
 	const root = await harness.root(BACKGROUND_CONTEXT, { agent: { model: { provider: "faux", modelId: "faux-1" }, cwd: directory } });
-	const request = mode === "resume" ? { requestId: "research-1" } : { requestId: "research-1", task: "Research batteries" };
+	const request = mode === "resume" ? { requestId: "research-1", mode: "resume" } : { requestId: "research-1", mode: "prompt", task: "Research batteries" };
 	const settled = await (await selectSubmission(harness, root, request)).wait(BACKGROUND_CONTEXT);
 	process.send?.({ type: "done", status: settled.status, modelCalls: faux.state.callCount });
 } finally {

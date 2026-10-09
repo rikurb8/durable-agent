@@ -42,9 +42,12 @@ export async function runSession(dag: Client, session: string, request?: Researc
 			const value = process.env[name];
 			if (value) container = container.withSecretVariable(name, dag.setSecret(name, value));
 		}
-		for (const name of ["ASK_AGENT_MODEL", "ASK_AGENT_CLASSIFIER"]) {
+		for (const name of ["ASK_AGENT_MODEL", "ASK_AGENT_CLASSIFIER", "ASK_AGENT_VERBOSITY"]) {
 			const value = process.env[name];
 			if (value) container = container.withEnvVariable(name, value);
+		}
+		if (request.verbosity !== "normal" && !process.env.ASK_AGENT_VERBOSITY) {
+			container = container.withEnvVariable("ASK_AGENT_VERBOSITY", request.verbosity);
 		}
 	}
 	const args = !request ? [] : request.task === undefined

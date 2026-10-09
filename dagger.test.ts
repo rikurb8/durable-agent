@@ -20,10 +20,10 @@ function fakeDagger(exitCode = 0) {
 
 test("Dagger CLI requires a safe session and explicit request identity", () => {
 	assert.deepEqual(parseDaggerArgs(["batteries", "--request-id", "r1", "Research"]), {
-		mode: "run", session: "batteries", request: { requestId: "r1", task: "Research" },
+		mode: "run", session: "batteries", request: { requestId: "r1", mode: "prompt", task: "Research", verbosity: "normal" },
 	});
 	assert.deepEqual(parseDaggerArgs(["batteries", "--resume", "r1"]), {
-		mode: "run", session: "batteries", request: { requestId: "r1" },
+		mode: "run", session: "batteries", request: { requestId: "r1", mode: "resume", verbosity: "normal" },
 	});
 	assert.deepEqual(parseDaggerArgs(["batteries", "--export"]), { mode: "export", session: "batteries" });
 	assert.deepEqual(parseDaggerArgs(["--test"]), { mode: "test" });
@@ -38,7 +38,7 @@ test("failed runs export partial articles, retain locked session state, and inva
 	t.after(() => { if (previous === undefined) delete process.env.RADIUS_API_KEY; else process.env.RADIUS_API_KEY = previous; });
 	const { client, calls } = fakeDagger(7);
 	const prompt = 'Research "$HOME"; do not interpret this as shell syntax';
-	assert.equal(await runSession(client, "batteries", { requestId: "r1", task: prompt }), 7);
+	assert.equal(await runSession(client, "batteries", { requestId: "r1", mode: "prompt", task: prompt }), 7);
 	const mount = calls.find((call) => call.name === "withMountedCache")!;
 	assert.equal(mount.args[0], "/work");
 	assert.deepEqual(mount.args[2], { sharing: CacheSharingMode.Locked });
@@ -54,7 +54,7 @@ test("failed runs export partial articles, retain locked session state, and inva
 	assert.ok(!calls.some((call) => call.name === "withEnvVariable" && call.args[1] === "test-secret"));
 	const firstNonce = calls.find((call) => call.name === "withEnvVariable" && call.args[0] === "ASK_AGENT_INVOCATION")!.args[1];
 	const second = fakeDagger();
-	await runSession(second.client, "batteries", { requestId: "r1" });
+	await runSession(second.client, "batteries", { requestId: "r1", mode: "resume" });
 	const secondNonce = second.calls.find((call) => call.name === "withEnvVariable" && call.args[0] === "ASK_AGENT_INVOCATION")!.args[1];
 	assert.notEqual(firstNonce, secondNonce);
 	assert.deepEqual(second.calls.filter((call) => call.name === "withExec").at(-1)!.args[0].slice(-2), ["--resume", "r1"]);

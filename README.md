@@ -1,17 +1,20 @@
 # Ask me anything
 
-A worked example of a **durable, resumable, checkpointed research agent** on
+A worked example of a **durable, resumable, checkpointed agent** on
 [`@earendil-works/pi-durable`](https://www.npmjs.com/package/@earendil-works/pi-durable).
-Ask any question; it searches the web through the Radius MCP server, classifies each
-candidate source, fetches the shortlist, and writes a sourced answer under `articles/`.
-Run with Node.js 24+.
+Talk to it in a REPL (or submit one prompt) and it decides for itself: answer directly,
+use a quick web lookup, or run full checkpointed research through the Radius MCP server
+(search → classify → fetch). Ask for an article and it writes a sourced one under
+`articles/`; otherwise it just answers in the conversation. Run with Node.js 24+.
 
 ```sh
 npm install
+npm start                         # interactive chat
 npm start -- "Why is battery recycling so hard, and what changed recently?"
+npm start -- "Research battery recycling and write an article"   # article only when asked
 ```
 
-Authenticate Radius in Pi (`/login radius`) or set `RADIUS_API_KEY`.
+Set `RADIUS_API_KEY`.
 
 ## The durability model
 
@@ -66,10 +69,17 @@ npm start -- --resume batteries-1                                    # finish it
 the existing run and replays committed results; a different prompt is rejected.
 - `--resume <id>` only waits for that run and never submits a prompt, so a typo cannot start
 unrelated work. An unknown ID fails instead of creating a new request.
+- With no prompt and no `--resume`, the CLI reads prompts from stdin: each line is one durable
+turn in the same conversation, so context carries over. `exit`, `quit`, or Ctrl-D ends it;
+Ctrl-C pauses the turn in flight and prints the request ID for `--resume`.
 - `ASK_AGENT_STATE_DIR` moves `.ask-agent/session.sqlite` (the whole state: transcript,
 tasks, and the resume point).
 - `SIGINT`/`SIGTERM` pauses instead of aborting: pending work stays resumable and
 `--resume <request-id>` picks it up.
+- `--quiet`/`-q` prints only the answer; `--verbose`/`-v` adds tool arguments and results,
+retries, spend, and task lifecycle; `-vv` adds turns, thinking, and checkpoints. The same
+levels are available as `ASK_AGENT_VERBOSITY=quiet|normal|verbose|debug`, which Dagger
+forwards into the container.
 
 An interrupted **non**-replay-safe tool is not silently retried; a run already recorded as
 terminally failed stays failed. Send a follow-up with a **new** request ID to continue with
