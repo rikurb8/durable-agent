@@ -3,8 +3,8 @@
  * the Radius MCP server when a question needs sources, and edits this repo's files
  * when asked.
  *
- *   node ask-agent.ts                          # interactive chat
- *   node ask-agent.ts "What changed recently?" # one-shot prompt
+ *   npm start                                 # interactive chat
+ *   npm start -- "What changed recently?" # one-shot prompt
  *
  * State lives in `.ask-agent/session.sqlite` (or ASK_AGENT_STATE_DIR).
  * Use --request-id <id> for idempotent submission, --resume <id> for recovery.
@@ -149,7 +149,7 @@ async function run(request: ResearchRequest) {
 		registry.install(askExtension(client));
 		registry.install(memoryExtension());
 		const models = await ModelRuntime.create();
-		const stateDir = process.env.ASK_AGENT_STATE_DIR ?? join(import.meta.dirname, ".ask-agent");
+		const stateDir = process.env.ASK_AGENT_STATE_DIR ?? join(import.meta.dirname, "..", ".ask-agent");
 		const storage = await openNodeSqliteStorage(join(stateDir, "session.sqlite"));
 		let harness: Harness | undefined;
 		let events: Awaited<ReturnType<typeof watchEvents>> | undefined;

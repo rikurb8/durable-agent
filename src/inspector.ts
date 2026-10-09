@@ -136,7 +136,7 @@ if (import.meta.main) {
 		const { values } = parseArgs({ options: { db: { type: "string" }, port: { type: "string", default: "4317" } } });
 		const port = positiveInteger(values.port!, "port")!;
 		if (port > 65535) throw new Error("Invalid port");
-		const path = resolve(values.db ?? join(process.env.ASK_AGENT_STATE_DIR ?? join(import.meta.dirname, ".ask-agent"), "session.sqlite"));
+		const path = resolve(values.db ?? join(process.env.ASK_AGENT_STATE_DIR ?? join(import.meta.dirname, "..", ".ask-agent"), "session.sqlite"));
 		const server = await createInspectorServer(path);
 		server.on("error", (error) => { console.error(error.message); server.close(); process.exitCode = 1; });
 		server.listen(port, "127.0.0.1", () => console.log(`Inspector: http://127.0.0.1:${port}\nRead-only: ${path}`));

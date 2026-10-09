@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { CacheSharingMode, connect, ReturnType, type Client } from "@dagger.io/dagger";
-import { parseRequest, type ResearchRequest } from "./session.ts";
+import { parseRequest, type ResearchRequest } from "../src/session.ts";
 
 // Multi-platform Node 24 image; update the digest deliberately with the lockfile.
 export const NODE_IMAGE = "node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20";
-const SOURCE_FILES = ["*.ts", "test/**"];
+const SOURCE_FILES = ["src/**", "scripts/**", "test/**"];
 const EXEC_OPTIONS = { expect: ReturnType.Any, experimentalPrivilegedNesting: false, insecureRootCapabilities: false };
 
 export function parseDaggerArgs(args: string[]) {
@@ -19,7 +19,7 @@ export function parseDaggerArgs(args: string[]) {
 }
 
 export function agentContainer(dag: Client) {
-	const source = dag.host().directory(import.meta.dirname, { include: ["package.json", "package-lock.json", ...SOURCE_FILES] });
+	const source = dag.host().directory(join(import.meta.dirname, ".."), { include: ["package.json", "package-lock.json", ...SOURCE_FILES] });
 	return dag.container().from(NODE_IMAGE).withWorkdir("/app")
 		.withFile("package.json", source.file("package.json"))
 		.withFile("package-lock.json", source.file("package-lock.json"))
@@ -55,7 +55,7 @@ export async function runSession(dag: Client, session: string, request?: Researc
 		: ["--request-id", request.requestId, "--", request.task];
 	const script = request ? `
 mkdir -p /work/articles /out || exit "$?"
-node /app/ask-agent.ts "$@"
+node /app/src/ask-agent.ts "$@"
 status=$?
 cp -a /work/articles /out/articles || exit "$?"
 exit "$status"
@@ -69,7 +69,7 @@ mkdir -p /out && cp -a /work/articles /out/articles
 	const exitCode = await result.exitCode();
 	// Missing export-only sessions have no /out; an agent failure still has partial articles to export.
 	if (request || exitCode === 0) {
-		const output = join(import.meta.dirname, "dagger-output", session);
+		const output = join(import.meta.dirname, "..", "dagger-output", session);
 		await result.directory("/out").export(output);
 		console.log(`Articles exported to ${output}/articles`);
 	}

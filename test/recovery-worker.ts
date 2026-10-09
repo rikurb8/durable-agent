@@ -9,8 +9,8 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type { McpClient } from "@earendil-works/pi-mcp";
-import { askExtension } from "../ask-agent.ts";
-import { selectSubmission } from "../session.ts";
+import { askExtension } from "../src/ask-agent.ts";
+import { selectSubmission } from "../src/session.ts";
 
 const [mode, directory] = process.argv.slice(2);
 const faux = fauxProvider();

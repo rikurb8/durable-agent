@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { join } from "node:path";
 import { CacheSharingMode, ReturnType, type Client } from "@dagger.io/dagger";
-import { parseDaggerArgs, runSession } from "./dagger.ts";
+import { parseDaggerArgs, runSession } from "../scripts/dagger.ts";
 
 function fakeDagger(exitCode = 0) {
 	const calls: { name: string; args: any[] }[] = [];
@@ -49,7 +50,10 @@ test("failed runs export partial articles, retain locked session state, and inva
 	assert.equal(execs.at(-1)!.args[1].experimentalPrivilegedNesting, false);
 	assert.deepEqual(execs.at(-1)!.args[0].slice(-4), ["--request-id", "r1", "--", prompt]);
 	assert.match(execs.at(-1)!.args[0][2], /status=\$\?[\s\S]*cp -a[\s\S]*exit "\$status"/);
-	assert.equal(calls.filter((call) => call.name === "export").length, 1);
+	assert.deepEqual(calls.filter((call) => call.name === "export").map((call) => call.args), [
+		[join(import.meta.dirname, "..", "dagger-output", "batteries")],
+	]);
+	assert.ok(execs.at(-1)!.args[0][2].includes('node /app/src/ask-agent.ts "$@"'));
 	assert.ok(calls.some((call) => call.name === "setSecret" && call.args[0] === "RADIUS_API_KEY"));
 	assert.ok(!calls.some((call) => call.name === "withEnvVariable" && call.args[1] === "test-secret"));
 	const firstNonce = calls.find((call) => call.name === "withEnvVariable" && call.args[0] === "ASK_AGENT_INVOCATION")!.args[1];
@@ -59,7 +63,8 @@ test("failed runs export partial articles, retain locked session state, and inva
 	assert.notEqual(firstNonce, secondNonce);
 	assert.deepEqual(second.calls.filter((call) => call.name === "withExec").at(-1)!.args[0].slice(-2), ["--resume", "r1"]);
 	const source = calls.find((call) => call.name === "directory")!;
-	assert.deepEqual(source.args[1].include, ["package.json", "package-lock.json", "*.ts", "test/**"]);
+	assert.equal(source.args[0], join(import.meta.dirname, ".."));
+	assert.deepEqual(source.args[1].include, ["package.json", "package-lock.json", "src/**", "scripts/**", "test/**"]);
 });
 
 test("export-only needs no credentials and does not start an agent; unknown sessions fail", async () => {

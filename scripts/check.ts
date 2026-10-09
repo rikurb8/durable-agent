@@ -2,7 +2,7 @@
  * Self-check for the wiring ask-agent.ts depends on: Radius credential, MCP connection,
  * the web search tool, and the model catalog. Run with `npm run check`.
  */
-import { connectRadiusMcp } from "./ask-agent.ts";
+import { connectRadiusMcp } from "../src/ask-agent.ts";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { toLlmContent } from "@earendil-works/pi-mcp";
 

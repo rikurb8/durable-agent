@@ -9,7 +9,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { createRegistry, Harness, MemoryStorage } from "@earendil-works/pi-durable";
-import { parseRequest, selectSubmission } from "./session.ts";
+import { parseRequest, selectSubmission } from "../src/session.ts";
 
 test("request parsing preserves legacy prompts and validates idempotent/resume forms", () => {
 	assert.equal(parseRequest(["research", "batteries"]).task, "research batteries");
@@ -80,7 +80,7 @@ test("SIGKILL + SQLite reopen reuses committed search, replays interrupted fetch
 	const directory = await mkdtemp(join(tmpdir(), "ask-recovery-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	async function worker(mode: string) {
-		const child = fork(join(import.meta.dirname, "test", "recovery-worker.ts"), [mode, directory], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+		const child = fork(join(import.meta.dirname, "recovery-worker.ts"), [mode, directory], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
 		t.after(() => { child.kill("SIGKILL"); });
 		let stderr = "";
 		child.stderr!.on("data", (chunk) => { stderr += chunk; });

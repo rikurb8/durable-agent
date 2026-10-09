@@ -8,7 +8,7 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createRegistry, Harness, MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { MemoryDoc, memoryExtension, memoryKeeper, parseNotes, renderMemory, type Note } from "./memory.ts";
+import { MemoryDoc, memoryExtension, memoryKeeper, parseNotes, renderMemory, type Note } from "../src/memory.ts";
 
 /** Poll until `check` holds, so a sleeping keeper has time to wake. */
 async function until(check: () => Promise<boolean>, timeoutMs = 5_000): Promise<void> {

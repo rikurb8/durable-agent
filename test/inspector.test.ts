@@ -11,8 +11,8 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { MemoryDoc, memoryExtension } from "./memory.ts";
-import { createInspectorServer, openInspector } from "./inspector.ts";
+import { MemoryDoc, memoryExtension } from "../src/memory.ts";
+import { createInspectorServer, openInspector } from "../src/inspector.ts";
 
 async function fixture(t: TestContext) {
 	const directory = await mkdtemp(join(tmpdir(), "ask-inspector-"));

@@ -16,6 +16,18 @@ npm start -- "Research battery recycling and write an article"   # article only 
 
 Set `RADIUS_API_KEY`.
 
+## Repository layout
+
+- `src/` — agent CLI, session handling, memory, and logging verbosity.
+- `src/inspector.ts` and `src/inspector/` — read-only inspector server and browser assets.
+- `scripts/` — live connectivity check and Dagger runner.
+- `test/` — offline tests and the crash-recovery worker.
+- `articles/` — generated articles.
+- `.ask-agent/` and `dagger-output/` — local runtime state and exports (gitignored).
+
+Use the npm commands above and below from the repository root. Source files run
+directly on Node.js; there is no build step.
+
 ## The durability model
 
 The point of this repo is the boundary between *committed* work and *replayed* work. Every
@@ -30,7 +42,7 @@ boundary below is a durable commit: after a crash, work above it is reused, not 
 What that buys you, concretely: a `web_search` or `web_fetch` killed mid-flight is retried on
 recovery instead of failing the turn, because it declares `replay: "safe"`. A tool with side
 effects is not silently repeated; the model sees `interrupted` and decides what to do.
-`session.test.ts` proves the first case with a real `SIGKILL` against the real SQLite state.
+`test/session.test.ts` proves the first case with a real `SIGKILL` against the real SQLite state.
 
 ## Memory
 
@@ -52,7 +64,7 @@ pile up it consolidates them — retiring the originals rather than dropping the
 reaches a note that consolidation merged away. It sleeps when there is nothing to do, is marked
 background so it never blocks a turn or an idle wait, and its watermark only advances on a
 successful model call, so a failed batch is retried instead of lost. `ASK_AGENT_MEMORY_MODEL`
-(`provider/model-id`) picks the model it uses; the default is `ASK_AGENT_MODEL`. See `memory.ts`.
+(`provider/model-id`) picks the model it uses; the default is `ASK_AGENT_MODEL`. See `src/memory.ts`.
 
 ## Read-only companion UI
 
@@ -123,16 +135,16 @@ the saved context. The chat model defaults to `radius/deepseek-v4.1-flash`; over
 
 | Swappable | Pinned |
 |---|---|
-| Storage: `MemoryStorage`, SQLite, JSONL, Cloudflare Durable Object, or a Dagger cache volume | The Radius MCP endpoint (`RADIUS_MCP_URL` in `ask-agent.ts`) |
+| Storage: `MemoryStorage`, SQLite, JSONL, Cloudflare Durable Object, or a Dagger cache volume | The Radius MCP endpoint (`RADIUS_MCP_URL` in `src/ask-agent.ts`) |
 | Model (`ASK_AGENT_MODEL`) and memory model (`ASK_AGENT_MEMORY_MODEL`) | The Radius tool names `tools_webSearch_run` / `tools_webFetch_run` |
-| Working directory and execution environment (`HarnessOptions.env`) | The Node image digest in `dagger.ts` |
+| Working directory and execution environment (`HarnessOptions.env`) | The Node image digest in `scripts/dagger.ts` |
 
-`ask-agent.ts` is the wiring; the web tools are a few lines each, and the durable machinery
+`src/ask-agent.ts` is the wiring; the web tools are a few lines each, and the durable machinery
 (task scheduling, replay, checkpoints) lives in pi-durable rather than here.
 
 ## Reproducible runs with Dagger
 
-`dagger.ts` runs the same agent in a pinned Node container, so the runtime and dependencies are
+`scripts/dagger.ts` runs the same agent in a pinned Node container, so the runtime and dependencies are
 identical locally and in CI. Each session gets a locked Dagger cache volume holding both the
 SQLite state and the articles, and artifacts are copied back to `dagger-output/<session>/articles`.
 

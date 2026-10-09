@@ -3,12 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node ask-agent.ts",
-    "inspect": "node inspector.ts",
-    "check": "node check.ts",
-    "dagger": "node dagger.ts",
-    "dagger:check": "node dagger.ts --test",
-    "test": "node --test *.test.ts"
+    "start": "node src/ask-agent.ts",
+    "inspect": "node src/inspector.ts",
+    "check": "node scripts/check.ts",
+    "dagger": "node scripts/dagger.ts",
+    "dagger:check": "node scripts/dagger.ts --test",
+    "test": "node --test test/*.test.ts"
   },
   "dependencies": {
     "@dagger.io/dagger": "0.21.10",
