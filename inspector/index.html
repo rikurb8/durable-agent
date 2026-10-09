@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Durable · Inspector</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">d</span><strong>durable<span class="muted"> / inspector</span></strong></div>
+    <div class="connection"><span class="readonly">READ ONLY</span><span id="connection" role="status">Connecting…</span></div>
+  </header>
+  <div id="error" role="alert" hidden></div>
+  <div class="workspace">
+    <aside class="sidebar" aria-label="Session navigation">
+      <div class="section-label">SESSION EXPLORER</div>
+      <label for="conversation">Conversation</label>
+      <select id="conversation"></select>
+      <div class="section-heading"><span class="section-label">REQUESTS</span><span id="request-count" class="count"></span></div>
+      <nav id="requests" aria-label="Requests"></nav>
+      <p class="sidebar-foot">A window into committed state.<br>No prompts. No side effects.</p>
+    </aside>
+    <main>
+      <div class="page-heading"><div><div class="eyebrow">OBSERVABILITY</div><h1 id="title">Conversation</h1></div><span id="commit" class="muted"></span></div>
+      <nav class="tabs" aria-label="Inspector views">
+        <button data-tab="timeline" aria-pressed="true">Timeline</button>
+        <button data-tab="tasks" aria-pressed="false">Tasks <span id="task-count" class="count"></span></button>
+        <button data-tab="memory" aria-pressed="false">Memory</button>
+        <button data-tab="state" aria-pressed="false">State</button>
+      </nav>
+      <div class="toolbar">
+        <input id="search" type="search" aria-label="Search transcript" placeholder="Search transcript, arguments, results…" maxlength="500">
+        <select id="filter" aria-label="Entry filter"><option value="all">All entries</option><option value="messages">Messages</option><option value="tools">Tool calls</option><option value="failures">Failures</option><option value="system">System & compaction</option></select>
+        <button id="latest" class="subtle">Latest ↓</button>
+      </div>
+      <div id="content" class="content" tabindex="0" aria-label="Inspector content"></div>
+    </main>
+    <aside class="detail-pane" aria-label="Selected item details">
+      <div class="section-heading"><span class="section-label">INSPECT</span><button id="clear-selection" class="subtle" aria-label="Clear selection">×</button></div>
+      <div id="detail"><div class="empty"><span class="empty-icon">⌁</span><h2>Follow the evidence</h2><p>Select an entry, task, or note to see its persisted details and connections.</p></div></div>
+      <p class="detail-foot">Task states are persisted, not a process heartbeat. Completed tasks retain outcomes, not their checkpoint history.</p>
+    </aside>
+  </div>
+</body>
+</html>

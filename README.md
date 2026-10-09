@@ -2,10 +2,10 @@
 
 A worked example of a **durable, resumable, checkpointed agent** on
 [`@earendil-works/pi-durable`](https://www.npmjs.com/package/@earendil-works/pi-durable).
-Talk to it in a REPL (or submit one prompt) and it decides for itself: answer directly,
-use a quick web lookup, or run full checkpointed research through the Radius MCP server
-(search → classify → fetch). Ask for an article and it writes a sourced one under
-`articles/`; otherwise it just answers in the conversation. Run with Node.js 24+.
+Talk to it in a REPL (or submit one prompt) and it decides for itself: answer directly, search
+the web through the Radius MCP server, and fetch the pages worth reading. Ask for an article and
+it writes a sourced one under `articles/`; otherwise it just answers in the conversation. Run with
+Node.js 24+.
 
 ```sh
 npm install
@@ -24,37 +24,70 @@ boundary below is a durable commit: after a crash, work above it is reused, not 
 | Work | Durable unit | After a crash |
 |---|---|---|
 | Submitting a question | submission with a `requestId` | the same ID reattaches and replays the committed answer |
-| One tool call (`web_search`, `web_fetch`, `write`, `research`) | its own `pi.tool` task | reruns only if declared `replay: "safe"`; otherwise the model sees `interrupted` |
-| Research phases (search → classify → fetch) | `ask.research` checkpoints, one child task per query / URL | resumes at the last finished phase; a finished phase never reruns |
+| One tool call (`web_search`, `web_fetch`, `write`, `bash`) | its own `pi.tool` task | reruns only if declared `replay: "safe"`; otherwise the model sees `interrupted` |
 | Model turns | `pi.generation` task | resumes from the last committed entry |
 
-What that buys you, concretely: **paid classification is never repeated.** A crash during
-the fetch phase restarts fetching, not classifying. `research.test.ts` proves it with a real
-`SIGKILL`: after recovery, each classifier call appears exactly once.
+What that buys you, concretely: a `web_search` or `web_fetch` killed mid-flight is retried on
+recovery instead of failing the turn, because it declares `replay: "safe"`. A tool with side
+effects is not silently repeated; the model sees `interrupted` and decides what to do.
+`session.test.ts` proves the first case with a real `SIGKILL` against the real SQLite state.
 
-## Checkpointed research
+## Memory
 
-`research` is one durable task (`ask.research`) whose phases each create child tasks and park
-until they finish:
+The agent keeps durable notes in a session document (`ask.memory`), rendered into the system
+prompt on every request, so a new turn — and a new process on the same `ASK_AGENT_STATE_DIR` —
+starts with them:
 
-```text
-ask.research
-├── ask.search   × one per query        (Radius web search)
-├── ask.classify × one per unique URL   (classifier; the paid step)
-└── ask.fetch    × one per shortlisted URL
+- `remember(text, tags?, source?)` saves a note; identical notes are dropped.
+- `recall(query)` searches the notes **and the verbatim transcript**, including the parts
+  compaction has already summarized away, because pi-durable keeps every entry forever.
+- `forget(id)` deletes a note that turned out wrong.
+
+This is the cheap half of a memory tree: nothing is ever lost (the transcript is the log), and
+`recall` is exact lookup instead of guided descent.
+
+A background keeper (`ask.memory`, one per top-level conversation) maintains the notes without
+the model asking. It distills transcript the agent has moved past into notes, and once the notes
+pile up it consolidates them — retiring the originals rather than dropping them, so `recall` still
+reaches a note that consolidation merged away. It sleeps when there is nothing to do, is marked
+background so it never blocks a turn or an idle wait, and its watermark only advances on a
+successful model call, so a failed batch is retried instead of lost. `ASK_AGENT_MEMORY_MODEL`
+(`provider/model-id`) picks the model it uses; the default is `ASK_AGENT_MODEL`. See `memory.ts`.
+
+## Read-only companion UI
+
+```sh
+npm run inspect                         # http://127.0.0.1:4317
+npm run inspect -- --db /path/to/session.sqlite --port 4318
 ```
 
-- Each phase commits `waiting` with its child task IDs, so the checkpoint *is* the commit.
-- Each child commits its own outcome. `allSettled`: one dead source does not kill the run.
-- URLs are deduplicated before classification, and only candidates above the relevance
-  threshold (`0.7` by default) are fetched.
-- Failures are returned as data and must be disclosed. The classifier judges **relevance**,
-  not accuracy or credibility, and the writer still has to check factual claims.
-- Classifier spend is reported on the tool result, so it lands in the conversation's usage.
+The local browser inspector reads `.ask-agent/session.sqlite` (or
+`ASK_AGENT_STATE_DIR/session.sqlite`) without starting a Harness, resuming tasks,
+or requiring model credentials. Start the CLI once to create a database first.
+It works alongside the CLI and continues working after the CLI stops.
 
-The default classifier is `typesafe/jev-latest`. Set `TYPESAFE_API_KEY` or configure that
-provider's credentials in Pi. For another classifier, set `ASK_AGENT_CLASSIFIER`, for example
-`openrouter/typesafe/jev-1.13`.
+- **Timeline:** messages, expandable tool arguments/results, recorded system-prompt
+  changes, and compaction/reset markers. Cards are colour-coded by kind (user, assistant,
+  tool result, system), with a matching left stripe, header tint, and label. Search covers the stored transcript (including
+  older entries); filters and “Load older entries” keep large transcripts browsable.
+- **Inspect panel:** raw records, linked task owners/children, current checkpoints,
+  terminal outcomes, and request/input/answer links.
+- **Tasks:** live and completed task records, including background work.
+- **Memory:** active/retired session notes, sources/tags, keeper state, and its
+  processed-through entry. Older model-visible memory appears in recorded prompt changes.
+- **State:** reconstructed documents, including usage, agent settings, inbox, and
+  committed generation/tool partial output. Conversation spend (total cost and tokens,
+  split by model and tool) is summarized above the document list.
+
+The UI polls once per second and never writes agent state. It binds only to
+`127.0.0.1`, rejects cross-origin requests, and renders stored content as text rather
+than executable HTML. Use the exact printed URL; this is not a remotely hosted service.
+
+Task status is **persisted state, not a heartbeat**: “running” can remain after a crash.
+Completed tasks retain outcomes, not a full checkpoint history; memory shows its current
+state, not a historical change log. This prototype understands pi-durable SQLite schema
+version 1 and rejects other versions. Task/request lists are currently unpaged; very large
+sessions may make polling slower. No editing, chat, runtime controls, or Dagger integration.
 
 ## Durable runs
 
@@ -91,13 +124,11 @@ the saved context. The chat model defaults to `radius/deepseek-v4.1-flash`; over
 | Swappable | Pinned |
 |---|---|
 | Storage: `MemoryStorage`, SQLite, JSONL, Cloudflare Durable Object, or a Dagger cache volume | The Radius MCP endpoint (`RADIUS_MCP_URL` in `ask-agent.ts`) |
-| Model (`ASK_AGENT_MODEL`) and classifier (`ASK_AGENT_CLASSIFIER`) | The default classifier `typesafe/jev-latest` |
+| Model (`ASK_AGENT_MODEL`) and memory model (`ASK_AGENT_MEMORY_MODEL`) | The Radius tool names `tools_webSearch_run` / `tools_webFetch_run` |
 | Working directory and execution environment (`HarnessOptions.env`) | The Node image digest in `dagger.ts` |
-| Research task tree: add or reorder phases in `research.ts` | Dagger's engine and its cache volumes |
 
-`ask-agent.ts` is the wiring; `research.ts` is the durable state machine. Nothing in the
-research task depends on the CLI, the storage backend, or the model provider, so the same
-task runs in memory in tests and in SQLite or a Dagger volume in production.
+`ask-agent.ts` is the wiring; the web tools are a few lines each, and the durable machinery
+(task scheduling, replay, checkpoints) lives in pi-durable rather than here.
 
 ## Reproducible runs with Dagger
 
@@ -113,8 +144,8 @@ npm run dagger:check                                                # npm test i
 ```
 
 - The session name selects the cache volume: reuse it to resume, use a new one for a fresh run.
-- `RADIUS_API_KEY` (plus `TYPESAFE_API_KEY`/`OPENROUTER_API_KEY` when classifying) is passed as a
-  Dagger secret, and `ASK_AGENT_MODEL`/`ASK_AGENT_CLASSIFIER` as ordinary environment.
+- `RADIUS_API_KEY` is passed as a Dagger secret, and `ASK_AGENT_MODEL`/`ASK_AGENT_VERBOSITY` as
+  ordinary environment.
 - Articles are exported even when the agent exits non-zero, so partial work is not lost.
 - A per-invocation nonce keeps Dagger's execution cache from replaying an agent run, while the
   dependency install still caches.
@@ -126,14 +157,14 @@ npm run dagger:check                                                # npm test i
 `npm test` runs offline with the real Harness and SQLite, a faux model, and a mocked Radius
 MCP server:
 
-- **Checkpoint proof:** `SIGKILL` mid-fetch, reopen the real SQLite storage in a child
-  process, and assert the search and classifier calls did not repeat while the fetch did.
-- Phase shape: one search child per query, one classify child per unique URL, one fetch child
-  per shortlisted URL; the advertisement never reaches the model.
-- Classifier failure is disclosed as a step failure and its spend still counts; a dead MCP
-  server is reported, never turned into an empty answer.
+- **Replay proof:** `SIGKILL` mid-`web_fetch`, reopen the real SQLite storage in a child
+  process, and assert the committed search is not repeated, the interrupted fetch is rerun, and
+  the article is written once.
+- Memory: note rendering and its cap, `remember` deduplication, `recall` finding both a note and
+  a transcript hit, the keeper distilling without the model asking, consolidation retiring the
+  originals, and a note surviving a close/reopen of the SQLite state.
 - Request-ID/resume semantics, and the same crash-recovery test for a plain tool call.
 - The Dagger pipeline shape.
 
 `npm run check` is a live Radius search and chat-model catalog smoke check; it does not verify
-classifier credentials or perform a paid classification.
+model credentials.

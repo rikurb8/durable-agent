@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node ask-agent.ts",
+    "inspect": "node inspector.ts",
     "check": "node check.ts",
     "dagger": "node dagger.ts",
     "dagger:check": "node dagger.ts --test",

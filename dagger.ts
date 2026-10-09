@@ -18,7 +18,7 @@ export function parseDaggerArgs(args: string[]) {
 	return { mode: "run", session, request: parseRequest(rest, true) } as const;
 }
 
-export function researcherContainer(dag: Client) {
+export function agentContainer(dag: Client) {
 	const source = dag.host().directory(import.meta.dirname, { include: ["package.json", "package-lock.json", ...SOURCE_FILES] });
 	return dag.container().from(NODE_IMAGE).withWorkdir("/app")
 		.withFile("package.json", source.file("package.json"))
@@ -29,8 +29,8 @@ export function researcherContainer(dag: Client) {
 
 /** Copy artifacts out of the cache mount during the same locked exec, even on a nonzero exit. */
 export async function runSession(dag: Client, session: string, request?: ResearchRequest) {
-	if (request && !process.env.RADIUS_API_KEY) throw new Error("Set RADIUS_API_KEY before running research in Dagger.");
-	let container = request ? researcherContainer(dag) : dag.container().from(NODE_IMAGE);
+	if (request && !process.env.RADIUS_API_KEY) throw new Error("Set RADIUS_API_KEY before running the agent in Dagger.");
+	let container = request ? agentContainer(dag) : dag.container().from(NODE_IMAGE);
 	// ponytail: engine-local cache is recoverable state, not permanent storage; use external durable storage before promising engine-loss recovery.
 	container = container.withMountedCache("/work", dag.cacheVolume(`ask-agent-v1-${session}`), { sharing: CacheSharingMode.Locked })
 		.withWorkdir("/work")
@@ -38,11 +38,11 @@ export async function runSession(dag: Client, session: string, request?: Researc
 		// Cache dependency installation, never an agent invocation or an artifact snapshot.
 		.withEnvVariable("ASK_AGENT_INVOCATION", randomUUID());
 	if (request) {
-		for (const name of ["RADIUS_API_KEY", "TYPESAFE_API_KEY", "OPENROUTER_API_KEY"]) {
+		for (const name of ["RADIUS_API_KEY"]) {
 			const value = process.env[name];
 			if (value) container = container.withSecretVariable(name, dag.setSecret(name, value));
 		}
-		for (const name of ["ASK_AGENT_MODEL", "ASK_AGENT_CLASSIFIER", "ASK_AGENT_VERBOSITY"]) {
+		for (const name of ["ASK_AGENT_MODEL", "ASK_AGENT_VERBOSITY"]) {
 			const value = process.env[name];
 			if (value) container = container.withEnvVariable(name, value);
 		}
@@ -63,7 +63,7 @@ exit "$status"
 test -d /work/articles || { echo 'No articles found for this session.' >&2; exit 1; }
 mkdir -p /out && cp -a /work/articles /out/articles
 `;
-	const result = await container.withExec(["sh", "-c", script, "research", ...args], EXEC_OPTIONS).sync();
+	const result = await container.withExec(["sh", "-c", script, "ask-agent", ...args], EXEC_OPTIONS).sync();
 	process.stdout.write(await result.stdout());
 	process.stderr.write(await result.stderr());
 	const exitCode = await result.exitCode();
@@ -81,7 +81,7 @@ if (import.meta.main) {
 		const options = parseDaggerArgs(process.argv.slice(2));
 		await connect(async (dag) => {
 			if (options.mode === "test") {
-				const result = await researcherContainer(dag).withEnvVariable("ASK_AGENT_INVOCATION", randomUUID())
+				const result = await agentContainer(dag).withEnvVariable("ASK_AGENT_INVOCATION", randomUUID())
 					.withExec(["npm", "test"], EXEC_OPTIONS).sync();
 				process.stdout.write(await result.stdout());
 				process.stderr.write(await result.stderr());
