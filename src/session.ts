@@ -4,6 +4,13 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { InboxDoc, UserEntry, type Conversation, type Harness, type InboxItem } from "@earendil-works/pi-durable";
 import { resolveVerbosity, VERBOSITY_OPTIONS, type Verbosity } from "./verbosity.ts";
 
+/** Host request IDs: 1–128 letters, digits, dots, underscores or hyphens. */
+export const REQUEST_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+
+export function isValidRequestId(id: string): boolean {
+	return REQUEST_ID_PATTERN.test(id);
+}
+
 export type ResearchRequest = {
 	requestId: string;
 	/** `prompt` submits once, `resume` only waits, `chat` reads prompts from stdin. */
@@ -24,7 +31,7 @@ export function parseRequest(args: string[], requireId = false): ResearchRequest
 	const suppliedId = values.resume ?? values["request-id"];
 	if (requireId && suppliedId === undefined) throw new Error("Dagger runs require --request-id <id> or --resume <id>.");
 	const requestId = suppliedId ?? randomUUID();
-	if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(requestId)) {
+	if (!isValidRequestId(requestId)) {
 		throw new Error("Request ID must be 1–128 letters, digits, dots, underscores or hyphens, starting with a letter or digit.");
 	}
 	// No prompt and no --resume is the interactive session; --request-id only seeds its first turn.

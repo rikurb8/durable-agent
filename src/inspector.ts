@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { apply } from "@earendil-works/chord/delta";
+import { applySecurityHeaders, isLocalSameOrigin, localAuthority } from "./http.ts";
 
 const PAGE_SIZE = 80;
 
@@ -103,17 +104,13 @@ export async function createInspectorServer(path: string) {
 		["/", "index.html", "text/html"], ["/app.js", "app.js", "text/javascript"], ["/style.css", "style.css", "text/css"],
 	].map(async ([route, file, type]) => [route, { body: await readFile(new URL(`./inspector/${file}`, import.meta.url)), type }] as const)).catch((error) => { inspector.close(); throw error; }));
 	const server = createServer((request, response) => {
-		response.setHeader("Cache-Control", "no-store");
-		response.setHeader("X-Content-Type-Options", "nosniff");
-		response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
-		const authority = `127.0.0.1:${(server.address() as { port: number }).port}`;
-		const origin = `http://${authority}`;
-		if (request.headers.host !== authority || (request.headers.origin && request.headers.origin !== origin) || request.headers["sec-fetch-site"] === "cross-site") {
+		applySecurityHeaders(response);
+		if (!isLocalSameOrigin(request, server)) {
 			response.writeHead(403).end("Local same-origin access only"); return;
 		}
 		if (request.method !== "GET") { response.writeHead(405, { Allow: "GET" }).end("Read-only inspector"); return; }
 		try {
-			const url = new URL(request.url!, origin);
+			const url = new URL(request.url!, `http://${localAuthority(server)}`);
 			if (url.pathname === "/api/state") {
 				response.setHeader("Content-Type", "application/json; charset=utf-8");
 				response.end(JSON.stringify(inspector.snapshot(url.searchParams)));

@@ -18,8 +18,8 @@ Set `RADIUS_API_KEY`.
 
 ## Repository layout
 
-- `src/` — agent CLI, session handling, and logging verbosity.
-- `src/inspector.ts` and `src/inspector/` — read-only inspector server and browser assets.
+- `src/` — agent CLI (`ask-agent.ts`), execution boundary (`runner.ts`), task catalog (`task-store.ts`), dispatcher (`task-manager.ts`), manager API (`manager.ts`), session handling, and logging verbosity.
+- `src/inspector.ts` and `src/inspector/` — read-only inspector / manager browser assets.
 - `scripts/` — live connectivity check and Dagger runner.
 - `test/` — offline tests and the crash-recovery worker.
 - `articles/` — generated articles.
@@ -50,6 +50,55 @@ keeper records remain inspectable under State/Tasks, but the keeper no longer ru
 Resuming a turn interrupted inside a removed memory tool is not supported; use a new
 request ID for a follow-up instead.
 
+## Local task manager
+
+The task manager turns the same durable Harness into a small local job runner: create a task,
+queue follow-ups, pause and resume, and watch the run in the browser. It keeps the standalone
+CLI and the read-only inspector unchanged.
+
+```sh
+RADIUS_API_KEY=... npm run manage              # http://127.0.0.1:4318
+RADIUS_API_KEY=... npm run manage -- --root /path/to/tasks --port 4319
+```
+
+State root (default `.ask-agent/tasks`, or `ASK_AGENT_MANAGER_ROOT`):
+
+```text
+<root>/
+  manager.sqlite        task + request catalog (metadata and execution intent)
+  owner.sqlite          process ownership lock, held for the manager's lifetime
+  <task-id>/
+    session.sqlite      that task's pi-durable database, authoritative for its run
+    workspace/          the agent's working directory for the task
+```
+
+- **One task owns one database, conversation, and workspace.** A follow-up reuses them with a
+  new request ID. A new task starts fresh; there is no shared memory or context inheritance.
+- **One active runner at a time.** Other requests wait in a persistent FIFO queue and start in
+  admission order. Task status is derived at read time from persisted intent plus runner
+  liveness, never stored as a heartbeat.
+- **Closing the browser does not stop work.** Stopping the manager pauses execution; restarting
+  it recovers unsettled `run` intent. Paused work never auto-resumes.
+- **Only one manager may own a root.** A second process fails immediately, before opening the
+  catalog or any task database. Process death releases the lock, so no PID file can go stale.
+- Credentials stay server-side. The manager accepts a model only from its allowlist
+  (`ASK_AGENT_MODEL`, plus `ASK_AGENT_MODELS=provider/model,...`), and never relays secrets.
+- Mutations bind to `127.0.0.1` and pass the inspector's exact Host, Origin, and Sec-Fetch-Site
+  checks. No capability token: a local process that could read one can already open the
+  databases directly.
+
+Recovery: interrupted, nonterminal requests retry automatically at most three times; a run that
+made durable progress (its session sequence advanced) resets that bound. Exhaustion leaves the
+task **Interrupted** with its last error and a manual **Resume**. Pre-model failures (missing
+credentials, MCP connect, model resolution) are **Failed**, count no attempt, and never loop.
+Terminal `done`/`unanswered` requests are never resubmitted.
+
+Limits of v1: the manager never deletes task directories, so
+`<root>/<task-id>/workspace/` grows without bound and needs manual cleanup. Managed tasks do not
+import `.ask-agent/session.sqlite` or Dagger sessions, and there is no task deletion, artifact
+download, parallel execution, or spending cap. Workspace separation is organizational, not a
+security sandbox: shell and file tools can reach outside their working directory.
+
 ## Read-only companion UI
 
 ```sh
@@ -76,6 +125,14 @@ It works alongside the CLI and continues working after the CLI stops.
 The UI polls once per second and never writes agent state. It binds only to
 `127.0.0.1`, rejects cross-origin requests, and renders stored content as text rather
 than executable HTML. Use the exact printed URL; this is not a remotely hosted service.
+
+When served by the task manager instead of `npm run inspect`, the same assets add a task
+list, a create form, pause/resume, follow-ups, the latest result and error, and the task's
+local workspace path. Task detail embeds the timeline, raw records, state/spend, and the
+internal task tree (the internal tab is labelled **Execution** to distinguish it from
+user-facing tasks). A stopped manager shows **MANAGER OFFLINE** and marks stored summaries
+stale rather than presenting them as fresh liveness. The standalone inspector stays
+read-only: no controls appear without the manager.
 
 Task status is **persisted state, not a heartbeat**: “running” can remain after a crash.
 Completed tasks retain outcomes, not a full checkpoint history. This prototype understands pi-durable SQLite schema
@@ -154,6 +211,12 @@ MCP server:
   process, and assert the committed search is not repeated, the interrupted fetch is rerun, and
   the article is written once.
 - Request-ID/resume semantics, and the same crash-recovery test for a plain tool call.
+- Runner/ownership boundaries: pre-model failures create no database, a paused run reattaches
+  without a duplicate turn, and the root lock excludes a second process and survives `SIGKILL`.
+- Manager catalog and dispatch: idempotent creation/follow-ups, queue order, one active runner,
+  task isolation, pause/resume across restarts, bounded recovery, and terminal failures.
+- Manager API boundaries: loopback/same-origin/Host checks, JSON and size validation, unknown
+  fields, invalid IDs, and empty state for a task without a session database.
 - The Dagger pipeline shape.
 
 `npm run check` is a live Radius search and chat-model catalog smoke check; it does not verify

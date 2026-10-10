@@ -127,6 +127,7 @@ test("HTTP boundary is GET-only, loopback/same-origin and serves no arbitrary fi
 	assert.equal((await fetch(`${base}/style.css`)).status, 200);
 	assert.equal((await fetch(`${base}/api/state`)).status, 200);
 	assert.equal((await fetch(`${base}/api/state?before=bad`)).status, 400);
+	assert.equal((await fetch(`${base}/api/tasks`)).status, 404, "the read-only inspector is not a manager");
 	assert.equal((await fetch(`${base}/api/state`, { method: "POST" })).status, 405);
 	assert.equal((await fetch(`${base}/api/state`, { headers: { Origin: "https://evil.test" } })).status, 403);
 	assert.equal((await fetch(`${base}/api/state`, { headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
