@@ -10,11 +10,24 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="logo">d</span><strong>durable<span class="muted"> / inspector</span></strong></div>
-    <div class="connection"><span class="readonly">READ ONLY</span><span id="connection" role="status">Connecting…</span></div>
+    <div class="connection"><span id="mode" class="readonly">READ ONLY</span><span id="connection" role="status">Connecting…</span></div>
   </header>
   <div id="error" role="alert" hidden></div>
   <div class="workspace">
     <aside class="sidebar" aria-label="Session navigation">
+      <section id="tasks-panel" hidden aria-label="Tasks">
+        <div class="section-heading"><span class="section-label">TASKS</span><span id="user-task-count" class="count"></span></div>
+        <form id="create-task" class="task-form">
+          <label for="objective">New task</label>
+          <textarea id="objective" required maxlength="20000" rows="3" placeholder="What should the agent do?"></textarea>
+          <label for="model">Model</label>
+          <select id="model"></select>
+          <button id="create" type="submit">Start task</button>
+          <p id="create-error" class="form-error" role="alert" hidden></p>
+        </form>
+        <nav id="task-list" aria-label="User tasks"></nav>
+        <p class="sidebar-foot">Tasks run with the manager's server credentials and may cost money while it is running. A manager restart resumes unfinished work.</p>
+      </section>
       <div class="section-label">SESSION EXPLORER</div>
       <label for="conversation">Conversation</label>
       <select id="conversation"></select>
@@ -24,10 +37,24 @@
     </aside>
     <main>
       <div class="page-heading"><div><div class="eyebrow">OBSERVABILITY</div><h1 id="title">Conversation</h1></div><span id="commit" class="muted"></span></div>
+      <section id="task-controls" class="task-controls" hidden aria-label="Task controls">
+        <div class="task-controls-row">
+          <span id="task-status" class="badge">—</span>
+          <button id="pause" type="button">Pause</button>
+          <button id="resume" type="button">Resume</button>
+          <form id="follow-up" class="follow-up">
+            <label class="visually-hidden" for="followup-text">Follow-up prompt</label>
+            <input id="followup-text" maxlength="20000" placeholder="Follow-up prompt…" autocomplete="off">
+            <button id="followup-send" type="submit">Send follow-up</button>
+          </form>
+        </div>
+        <p id="task-result" class="task-result" hidden></p>
+        <p id="task-error" class="task-error" role="status" hidden></p>
+        <p class="meta" id="task-workspace"></p>
+      </section>
       <nav class="tabs" aria-label="Inspector views">
         <button data-tab="timeline" aria-pressed="true">Timeline</button>
-        <button data-tab="tasks" aria-pressed="false">Tasks <span id="task-count" class="count"></span></button>
-        <button data-tab="memory" aria-pressed="false">Memory</button>
+        <button data-tab="tasks" aria-pressed="false">Execution <span id="task-count" class="count"></span></button>
         <button data-tab="state" aria-pressed="false">State</button>
       </nav>
       <div class="toolbar">
@@ -39,7 +66,7 @@
     </main>
     <aside class="detail-pane" aria-label="Selected item details">
       <div class="section-heading"><span class="section-label">INSPECT</span><button id="clear-selection" class="subtle" aria-label="Clear selection">×</button></div>
-      <div id="detail"><div class="empty"><span class="empty-icon">⌁</span><h2>Follow the evidence</h2><p>Select an entry, task, or note to see its persisted details and connections.</p></div></div>
+      <div id="detail"><div class="empty"><span class="empty-icon">⌁</span><h2>Follow the evidence</h2><p>Select an entry, task, request, or document to see its persisted details and connections.</p></div></div>
       <p class="detail-foot">Task states are persisted, not a process heartbeat. Completed tasks retain outcomes, not their checkpoint history.</p>
     </aside>
   </div>

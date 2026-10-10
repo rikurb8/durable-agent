@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"],
+      "description": "Drive and inspect a real Chrome for browser acceptance checks of the task UI."
+    }
+  }
+}

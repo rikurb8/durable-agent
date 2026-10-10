@@ -7,12 +7,14 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { Type } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { createRegistry, Harness } from "@earendil-works/pi-durable";
+import { createRegistry, defineDoc, defineExtension, defineTool, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { MemoryDoc, memoryExtension } from "../src/memory.ts";
 import { createInspectorServer, openInspector } from "../src/inspector.ts";
+
+const TestDoc = defineDoc({ kind: "test.state", version: 1, scope: "session", initial: () => ({ text: "", count: 0 }) });
 
 async function fixture(t: TestContext) {
 	const directory = await mkdtemp(join(tmpdir(), "ask-inspector-"));
@@ -20,7 +22,17 @@ async function fixture(t: TestContext) {
 	const path = join(directory, "session.sqlite");
 	const faux = fauxProvider();
 	const models = createModels(); models.setProvider(faux.provider);
-	const registry = createRegistry(); registry.install(memoryExtension());
+	const registry = createRegistry();
+	registry.install(defineExtension({
+		name: "test",
+		tools: [defineTool({
+			name: "echo", parameters: Type.Object({ text: Type.String() }), description: "Echo text.",
+			execute: async ({ text }, api, context) => {
+				await api.commit(async (tx) => { (await tx.doc(TestDoc)).text = text; }, context);
+				return { content: [{ type: "text", text }] };
+			},
+		})],
+	}));
 	const harness = await Harness.open(await openNodeSqliteStorage(path), { models, registry }, context);
 	t.after(() => harness.close(context));
 	const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
@@ -34,13 +46,13 @@ function dump(path: string) {
 	} finally { db.close(); }
 }
 
-test("inspector reads live WAL, links tools, reconstructs memory and remains observational", async (t) => {
+test("inspector reads live WAL, links tools, reconstructs documents and remains observational", async (t) => {
 	const { path, faux, harness, root } = await fixture(t);
 	faux.setResponses([
-		fauxAssistantMessage(fauxToolCall("remember", { text: "<script>alert('untrusted')</script>", tags: ["test"] }, { id: "remember-1" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("echo", { text: "<script>alert('untrusted')</script>" }, { id: "echo-1" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Saved."),
 	]);
-	await (await root.submit({ type: "input", content: "Remember this", requestId: "inspect-1" }, context)).wait(context);
+	await (await root.submit({ type: "input", content: "Echo this", requestId: "inspect-1" }, context)).wait(context);
 	const before = dump(path);
 	const calls = faux.state.callCount;
 	const inspector = openInspector(path);
@@ -51,19 +63,19 @@ test("inspector reads live WAL, links tools, reconstructs memory and remains obs
 	const tool = first.tasks.find((task) => task.kind === "pi.tool");
 	assert.ok(first.entries.some((entry) => entry.id === tool.input.assistant));
 	assert.ok(first.entries.some((entry) => entry.id === tool.state.outcome.result.entryId && entry.byTaskId === tool.id));
-	assert.deepEqual(first.documents.find((doc) => doc.record.kind === "ask.memory").value, await harness.snapshot(MemoryDoc, context));
+	assert.deepEqual(first.documents.find((doc) => doc.record.kind === "test.state").value, await harness.snapshot(TestDoc, context));
 	assert.ok(first.entries.some((entry) => entry.kind === "pi.system"));
 	assert.equal(dump(path), before, "observing must not migrate, recover, or write any database records");
 	assert.equal(faux.state.callCount, calls, "observing never calls a model");
 
 	await root.commit(async (tx) => {
-		const memory = await tx.doc(MemoryDoc);
-		memory.retired.push(...memory.notes.splice(0));
-		memory.distilledThrough = String(first.entries[0].id);
+		const doc = await tx.doc(TestDoc);
+		doc.text = "Updated";
+		doc.count++;
 	}, context);
 	const latest = inspector.snapshot(new URLSearchParams());
 	assert.ok(Number(latest.seq) > Number(first.seq));
-	assert.deepEqual(latest.documents.find((doc) => doc.record.kind === "ask.memory").value, await harness.snapshot(MemoryDoc, context), "Chord delta reconstruction matches the live harness");
+	assert.deepEqual(latest.documents.find((doc) => doc.record.kind === "test.state").value, await harness.snapshot(TestDoc, context), "Chord delta reconstruction matches the live harness");
 	await harness.close(context);
 	assert.equal(inspector.snapshot(new URLSearchParams()).entries.length, first.entries.length, "inspection survives writer shutdown");
 });
@@ -115,6 +127,7 @@ test("HTTP boundary is GET-only, loopback/same-origin and serves no arbitrary fi
 	assert.equal((await fetch(`${base}/style.css`)).status, 200);
 	assert.equal((await fetch(`${base}/api/state`)).status, 200);
 	assert.equal((await fetch(`${base}/api/state?before=bad`)).status, 400);
+	assert.equal((await fetch(`${base}/api/tasks`)).status, 404, "the read-only inspector is not a manager");
 	assert.equal((await fetch(`${base}/api/state`, { method: "POST" })).status, 405);
 	assert.equal((await fetch(`${base}/api/state`, { headers: { Origin: "https://evil.test" } })).status, 403);
 	assert.equal((await fetch(`${base}/api/state`, { headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);

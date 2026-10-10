@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const state = { data: null, conversation: null, entries: new Map(), before: null, next: null, tab: 'timeline', selected: null, query: '', filter: 'all' };
+const state = { data: null, conversation: null, entries: new Map(), before: null, next: null, tab: 'timeline', selected: null, query: '', filter: 'all', manager: null, tasks: [], taskId: null, managerError: null };
 let requestNumber = 0;
 let lastPayload = '';
 
@@ -47,15 +47,20 @@ function preserve(container, render) {
 function resetEntries() { state.entries.clear(); state.next = null; lastPayload = ''; }
 async function refresh(older = false) {
   const request = ++requestNumber;
+  const task = state.taskId;
+  // Manager mode without a selected task has nothing to read yet.
+  if (state.manager !== null && task === null) return;
   const params = new URLSearchParams({ q: state.query, filter: state.filter });
   if (state.conversation !== null) params.set('conversation', state.conversation);
   const before = older ? state.next : state.before;
   if (before) params.set('before', before);
+  const endpoint = state.manager !== null ? `/api/tasks/${task}/state` : '/api/state';
   try {
-    const response = await fetch(`/api/state?${params}`);
+    const response = await fetch(`${endpoint}?${params}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
-    if (request !== requestNumber) return;
+    // A late response from another task must never replace the selected task's view.
+    if (request !== requestNumber || task !== state.taskId) return;
     $('error').hidden = true;
     $('connection').textContent = `Synced ${new Date().toLocaleTimeString()}`;
     const payload = JSON.stringify(data);
@@ -93,7 +98,8 @@ function jump(id) {
 }
 function renderNavigation() {
   const { data } = state;
-  $('title').textContent = `Conversation ${data.conversation ?? '—'}`;
+  const selected = state.manager !== null && state.taskId ? taskById(state.taskId) : null;
+  $('title').textContent = selected ? selected.objective : `Conversation ${data.conversation ?? '—'}`;
   $('commit').textContent = `commit ${Number(data.seq) - 1}`;
   $('conversation').replaceChildren(...data.conversations.map((item) => {
     const option = el('option', '', `#${item.id}${item.parent ? ` · fork of #${item.parent.conversationId}` : ''}`);
@@ -121,7 +127,6 @@ function renderContent() {
     $('content').replaceChildren();
     if (state.tab === 'timeline') renderTimeline();
     if (state.tab === 'tasks') renderTasks();
-    if (state.tab === 'memory') renderMemory();
     if (state.tab === 'state') renderState();
   });
 }
@@ -185,33 +190,6 @@ function renderTasks() {
 function stat(value, label) {
   const node = el('div', 'stat'); node.append(el('strong', '', value), el('span', '', label)); return node;
 }
-function renderMemory() {
-  const content = $('content');
-  const memory = documentValue('ask.memory');
-  content.append(el('div', 'notice', 'Memory is shared across this session. These are the current notes, not a historical snapshot. Recorded system prompt changes in the timeline show what was supplied to past turns.'));
-  if (!memory) { content.append(empty('No memory document has been saved in this session yet.')); return; }
-  const stats = el('div', 'stats');
-  stats.append(stat(memory.notes?.length ?? 0, 'active notes'), stat(memory.retired?.length ?? 0, 'retired notes'));
-  content.append(stats);
-  if (memory.distilledThrough) content.append(button(`Keeper processed through entry #${memory.distilledThrough} ↗`, () => jump(memory.distilledThrough), 'list-button'));
-  else content.append(el('p', 'muted', 'Keeper has not advanced its transcript watermark.'));
-  if (memory.consolidatedAt) content.append(el('p', 'meta', `Last consolidation: ${time(memory.consolidatedAt)}`));
-  for (const task of state.data.tasks.filter((task) => task.kind === 'ask.memory' && task.conversationId === state.conversation)) content.append(taskButton(task));
-  for (const [label, notes] of [['Active notes', memory.notes ?? []], ['Retired notes', memory.retired ?? []]]) {
-    content.append(el('h3', '', label));
-    if (!notes.length) content.append(el('p', 'muted', 'None yet.'));
-    for (const note of [...notes].reverse()) {
-      const card = el('article', `entry note${label === 'Retired notes' ? ' retired' : ''}`);
-      selectable(card, 'note', note);
-      const meta = el('div', 'note-meta');
-      meta.append(button(`#${note.id} ↗`, () => select('note', note), 'subtle'), el('span', 'meta', time(note.at)));
-      for (const tag of note.tags ?? []) meta.append(badge(tag));
-      card.append(meta, el('p', '', note.text));
-      if (note.source) card.append(el('p', 'meta', `Source: ${note.source}`));
-      content.append(card);
-    }
-  }
-}
 function documentRecord(kind) { return state.data?.documents.find((doc) => doc.record.kind === kind); }
 function renderState() {
   const content = $('content');
@@ -241,7 +219,7 @@ function renderState() {
 function renderDetail() {
   const detail = $('detail');
   if (!state.selected) {
-    detail.replaceChildren(empty('Select an entry, task, or note to inspect its persisted details and connections.'));
+    detail.replaceChildren(empty('Select an entry, task, request, or document to inspect its persisted details and connections.'));
     return;
   }
   preserve(detail, () => {
@@ -250,10 +228,6 @@ function renderDetail() {
     if (type === 'task') value = state.data.tasks.find((task) => task.id === value.id) ?? value;
     if (type === 'document') value = state.data.documents.find((doc) => doc.record.id === value.record.id) ?? value;
     if (type === 'request') value = state.data.submissions.find((item) => item.id === value.id) ?? value;
-    if (type === 'note') {
-      const memory = documentValue('ask.memory');
-      value = [...(memory?.notes ?? []), ...(memory?.retired ?? [])].find((note) => note.id === value.id) ?? value;
-    }
     detail.append(el('h2', '', `${type === 'document' ? value.record.kind : value.kind ?? type} #${value.id ?? value.record?.id}`));
     if (type === 'task') {
       detail.append(badge(status(value)));
@@ -285,6 +259,197 @@ function renderDetail() {
   });
 }
 
+// --- Manager mode: user-facing tasks layered over the same inspector views ---
+
+function taskById(id) { return state.tasks.find((task) => task.id === id) ?? null; }
+
+function taskBadge(text) { return el('span', `badge ${String(text).toLowerCase()}`, text); }
+
+function selectTask(id) {
+  if (state.taskId === id) return;
+  state.taskId = id;
+  state.before = null;
+  state.selected = null;
+  state.actionError = null;
+  // Clear the previous task's view first: a switch must never show another task's transcript.
+  state.data = null;
+  state.conversation = null;
+  resetEntries();
+  $('content').replaceChildren();
+  $('detail').replaceChildren();
+  $('requests').replaceChildren();
+  $('conversation').replaceChildren();
+  history.replaceState(null, '', `#task=${id}`);
+  renderTaskPanel();
+  refresh();
+}
+
+function renderTaskPanel() {
+  const panel = $('tasks-panel');
+  if (state.manager === null) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const disconnected = state.managerError !== null;
+  $('mode').textContent = disconnected ? 'MANAGER OFFLINE' : 'MANAGER';
+  $('user-task-count').textContent = state.tasks.length;
+  preserve($('task-list'), () => {
+    $('task-list').replaceChildren();
+    if (disconnected) $('task-list').append(el('p', 'form-error', `Manager unreachable: ${state.managerError}. Showing stored task summaries; they may be stale.`));
+    if (!state.tasks.length && !disconnected) $('task-list').append(el('p', 'meta', 'No tasks yet. Start one above.'));
+    for (const task of state.tasks) {
+      const node = el('button', `task-card${task.id === state.taskId ? ' selected' : ''}${disconnected ? ' stale' : ''}`);
+      node.type = 'button';
+      node.append(el('span', 'objective', task.objective), taskBadge(task.status));
+      if (task.lastError) node.append(el('span', 'task-meta', task.lastError));
+      node.append(el('span', 'task-meta', `workspace: ${task.workspacePath}`));
+      node.addEventListener('click', () => selectTask(task.id));
+      $('task-list').append(node);
+    }
+  });
+  renderTaskControls();
+}
+
+function renderTaskControls() {
+  const controls = $('task-controls');
+  const task = state.taskId ? taskById(state.taskId) : null;
+  if (state.manager === null || !task) { controls.hidden = true; return; }
+  controls.hidden = false;
+  const disconnected = state.managerError !== null;
+  const status = $('task-status');
+  status.textContent = task.status;
+  status.className = `badge ${task.status.toLowerCase()}`;
+  const pausable = ['Queued', 'Running', 'Recovering', 'Interrupted'].includes(task.status);
+  const resumable = ['Paused', 'Interrupted', 'Failed'].includes(task.status);
+  const followable = ['Completed', 'Failed'].includes(task.status);
+  $('pause').disabled = disconnected || !pausable;
+  $('pause').title = disconnected ? 'The manager is unreachable.' : pausable ? 'Persist pause intent and close the active run.' : `Pause is not available while the task is ${task.status}.`;
+  $('resume').disabled = disconnected || !resumable;
+  $('resume').title = disconnected ? 'The manager is unreachable.' : resumable ? 'Re-enqueue the same request and reset the recovery budget.' : `Resume is not available while the task is ${task.status}.`;
+  $('followup-text').disabled = disconnected || !followable;
+  $('followup-send').disabled = disconnected || !followable;
+  $('followup-send').title = disconnected ? 'The manager is unreachable.' : followable ? 'Send a follow-up in this task’s conversation.' : 'A follow-up is allowed once the current request settles.';
+  if (task.result) { $('task-result').textContent = task.result; $('task-result').hidden = false; } else { $('task-result').hidden = true; }
+  const error = state.actionError ?? (task.lastError ? `${task.status === 'Failed' ? 'Failure' : 'Last error'}: ${task.lastError}` : null);
+  $('task-error').textContent = error ?? '';
+  $('task-error').hidden = error === null;
+  $('task-workspace').textContent = `Local workspace: ${task.workspacePath}`;
+}
+
+async function pollTasks() {
+  if (state.manager === null) return;
+  try {
+    const response = await fetch('/api/tasks');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+    state.manager = data;
+    state.tasks = data.tasks ?? [];
+    state.managerError = null;
+    if (state.taskId === null && state.tasks.length) selectTask(state.tasks[0].id);
+    $('connection').textContent = `Manager synced ${new Date().toLocaleTimeString()}`;
+    renderTaskPanel();
+  } catch (error) {
+    state.managerError = error.message;
+    $('connection').textContent = 'Manager disconnected';
+    renderTaskPanel();
+  }
+}
+
+function populateModels() {
+  const models = state.manager?.models ?? [];
+  const options = models.map((model) => {
+    const option = el('option', '', `${model.provider}/${model.modelId}`);
+    option.value = `${model.provider}/${model.modelId}`;
+    return option;
+  });
+  $('model').replaceChildren(...options);
+  const fallback = state.manager?.defaultModel;
+  if (fallback) $('model').value = `${fallback.provider}/${fallback.modelId}`;
+}
+
+async function post(path, body) {
+  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error ?? `HTTP ${response.status}`);
+  return data;
+}
+
+// One creation key survives retries, so a lost acknowledgement never creates a second task.
+let createIntent = null;
+async function submitCreate(event) {
+  event.preventDefault();
+  const objective = $('objective').value.trim();
+  const model = $('model').value;
+  if (!objective) return;
+  if (!createIntent || createIntent.objective !== objective || createIntent.model !== model) {
+    createIntent = { key: crypto.randomUUID(), objective, model };
+  }
+  $('create').disabled = true;
+  $('create-error').hidden = true;
+  try {
+    const data = await post('/api/tasks', { creationKey: createIntent.key, objective, model });
+    createIntent = null;
+    $('objective').value = '';
+    selectTask(data.task.id);
+    await pollTasks();
+  } catch (error) {
+    $('create-error').textContent = `${error.message} Retrying keeps the same command.`;
+    $('create-error').hidden = false;
+  } finally {
+    $('create').disabled = false;
+  }
+}
+
+// One follow-up request ID survives retries the same way.
+let followIntent = null;
+async function submitFollowUp(event) {
+  event.preventDefault();
+  const prompt = $('followup-text').value.trim();
+  const taskId = state.taskId;
+  if (!prompt || !taskId) return;
+  if (!followIntent || followIntent.prompt !== prompt || followIntent.taskId !== taskId) {
+    followIntent = { taskId, requestId: crypto.randomUUID(), prompt };
+  }
+  $('followup-send').disabled = true;
+  state.actionError = null;
+  try {
+    await post(`/api/tasks/${taskId}/requests`, { requestId: followIntent.requestId, prompt });
+    followIntent = null;
+    $('followup-text').value = '';
+    await pollTasks();
+  } catch (error) {
+    state.actionError = `${error.message} Retrying keeps the same command.`;
+  } finally {
+    renderTaskControls();
+  }
+}
+
+async function lifecycle(action) {
+  const taskId = state.taskId;
+  if (!taskId) return;
+  state.actionError = null;
+  $(action).disabled = true;
+  try {
+    await post(`/api/tasks/${taskId}/${action}`, {});
+    await pollTasks();
+  } catch (error) {
+    state.actionError = error.message;
+  } finally {
+    renderTaskControls();
+  }
+}
+
+// Read-only inspector mode is exactly GET /api/tasks failing.
+async function detectManager() {
+  try {
+    const response = await fetch('/api/tasks');
+    if (!response.ok) return false;
+    state.manager = await response.json();
+    state.tasks = state.manager.tasks ?? [];
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 $('conversation').addEventListener('change', () => {
   state.conversation = Number($('conversation').value); state.before = null; state.selected = null;
   resetEntries(); refresh();
@@ -298,7 +463,19 @@ $('filter').addEventListener('change', () => { state.filter = $('filter').value;
 $('latest').addEventListener('click', () => { state.before = null; resetEntries(); refresh().then(() => { $('content').scrollTop = $('content').scrollHeight; }); });
 $('clear-selection').addEventListener('click', () => { state.selected = null; renderDetail(); renderContent(); });
 for (const node of document.querySelectorAll('[data-tab]')) node.addEventListener('click', () => setTab(node.dataset.tab));
+$('create-task').addEventListener('submit', submitCreate);
+$('follow-up').addEventListener('submit', submitFollowUp);
+$('pause').addEventListener('click', () => lifecycle('pause'));
+$('resume').addEventListener('click', () => lifecycle('resume'));
+
+if (await detectManager()) {
+  populateModels();
+  renderTaskPanel();
+  const requested = new URLSearchParams(location.hash.replace(/^#/, '')).get('task');
+  const first = requested && state.tasks.some((task) => task.id === requested) ? requested : state.tasks[0]?.id ?? null;
+  if (first) selectTask(first);
+}
 await refresh();
 // Recursive timeout avoids stacking polling requests when the database is busy.
-async function poll() { await refresh(); setTimeout(poll, 1000); }
+async function poll() { await pollTasks(); await refresh(); setTimeout(poll, 1000); }
 setTimeout(poll, 1000);

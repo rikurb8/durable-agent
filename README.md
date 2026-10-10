@@ -18,8 +18,8 @@ Set `RADIUS_API_KEY`.
 
 ## Repository layout
 
-- `src/` — agent CLI, session handling, memory, and logging verbosity.
-- `src/inspector.ts` and `src/inspector/` — read-only inspector server and browser assets.
+- `src/` — agent CLI (`ask-agent.ts`), execution boundary (`runner.ts`), task catalog (`task-store.ts`), dispatcher (`task-manager.ts`), manager API (`manager.ts`), session handling, and logging verbosity.
+- `src/inspector.ts` and `src/inspector/` — read-only inspector / manager browser assets.
 - `scripts/` — live connectivity check and Dagger runner.
 - `test/` — offline tests and the crash-recovery worker.
 - `articles/` — generated articles.
@@ -44,27 +44,60 @@ recovery instead of failing the turn, because it declares `replay: "safe"`. A to
 effects is not silently repeated; the model sees `interrupted` and decides what to do.
 `test/session.test.ts` proves the first case with a real `SIGKILL` against the real SQLite state.
 
-## Memory
+The custom memory tools and background keeper have been removed; conversation transcripts
+and normal context compaction remain. Existing databases are not rewritten: old notes and
+keeper records remain inspectable under State/Tasks, but the keeper no longer runs.
+Resuming a turn interrupted inside a removed memory tool is not supported; use a new
+request ID for a follow-up instead.
 
-The agent keeps durable notes in a session document (`ask.memory`), rendered into the system
-prompt on every request, so a new turn — and a new process on the same `ASK_AGENT_STATE_DIR` —
-starts with them:
+## Local task manager
 
-- `remember(text, tags?, source?)` saves a note; identical notes are dropped.
-- `recall(query)` searches the notes **and the verbatim transcript**, including the parts
-  compaction has already summarized away, because pi-durable keeps every entry forever.
-- `forget(id)` deletes a note that turned out wrong.
+The task manager turns the same durable Harness into a small local job runner: create a task,
+queue follow-ups, pause and resume, and watch the run in the browser. It keeps the standalone
+CLI and the read-only inspector unchanged.
 
-This is the cheap half of a memory tree: nothing is ever lost (the transcript is the log), and
-`recall` is exact lookup instead of guided descent.
+```sh
+RADIUS_API_KEY=... npm run manage              # http://127.0.0.1:4318
+RADIUS_API_KEY=... npm run manage -- --root /path/to/tasks --port 4319
+```
 
-A background keeper (`ask.memory`, one per top-level conversation) maintains the notes without
-the model asking. It distills transcript the agent has moved past into notes, and once the notes
-pile up it consolidates them — retiring the originals rather than dropping them, so `recall` still
-reaches a note that consolidation merged away. It sleeps when there is nothing to do, is marked
-background so it never blocks a turn or an idle wait, and its watermark only advances on a
-successful model call, so a failed batch is retried instead of lost. `ASK_AGENT_MEMORY_MODEL`
-(`provider/model-id`) picks the model it uses; the default is `ASK_AGENT_MODEL`. See `src/memory.ts`.
+State root (default `.ask-agent/tasks`, or `ASK_AGENT_MANAGER_ROOT`):
+
+```text
+<root>/
+  manager.sqlite        task + request catalog (metadata and execution intent)
+  owner.sqlite          process ownership lock, held for the manager's lifetime
+  <task-id>/
+    session.sqlite      that task's pi-durable database, authoritative for its run
+    workspace/          the agent's working directory for the task
+```
+
+- **One task owns one database, conversation, and workspace.** A follow-up reuses them with a
+  new request ID. A new task starts fresh; there is no shared memory or context inheritance.
+- **One active runner at a time.** Other requests wait in a persistent FIFO queue and start in
+  admission order. Task status is derived at read time from persisted intent plus runner
+  liveness, never stored as a heartbeat.
+- **Closing the browser does not stop work.** Stopping the manager pauses execution; restarting
+  it recovers unsettled `run` intent. Paused work never auto-resumes.
+- **Only one manager may own a root.** A second process fails immediately, before opening the
+  catalog or any task database. Process death releases the lock, so no PID file can go stale.
+- Credentials stay server-side. The manager accepts a model only from its allowlist
+  (`ASK_AGENT_MODEL`, plus `ASK_AGENT_MODELS=provider/model,...`), and never relays secrets.
+- Mutations bind to `127.0.0.1` and pass the inspector's exact Host, Origin, and Sec-Fetch-Site
+  checks. No capability token: a local process that could read one can already open the
+  databases directly.
+
+Recovery: interrupted, nonterminal requests retry automatically at most three times; a run that
+made durable progress (its session sequence advanced) resets that bound. Exhaustion leaves the
+task **Interrupted** with its last error and a manual **Resume**. Pre-model failures (missing
+credentials, MCP connect, model resolution) are **Failed**, count no attempt, and never loop.
+Terminal `done`/`unanswered` requests are never resubmitted.
+
+Limits of v1: the manager never deletes task directories, so
+`<root>/<task-id>/workspace/` grows without bound and needs manual cleanup. Managed tasks do not
+import `.ask-agent/session.sqlite` or Dagger sessions, and there is no task deletion, artifact
+download, parallel execution, or spending cap. Workspace separation is organizational, not a
+security sandbox: shell and file tools can reach outside their working directory.
 
 ## Read-only companion UI
 
@@ -85,8 +118,6 @@ It works alongside the CLI and continues working after the CLI stops.
 - **Inspect panel:** raw records, linked task owners/children, current checkpoints,
   terminal outcomes, and request/input/answer links.
 - **Tasks:** live and completed task records, including background work.
-- **Memory:** active/retired session notes, sources/tags, keeper state, and its
-  processed-through entry. Older model-visible memory appears in recorded prompt changes.
 - **State:** reconstructed documents, including usage, agent settings, inbox, and
   committed generation/tool partial output. Conversation spend (total cost and tokens,
   split by model and tool) is summarized above the document list.
@@ -95,9 +126,16 @@ The UI polls once per second and never writes agent state. It binds only to
 `127.0.0.1`, rejects cross-origin requests, and renders stored content as text rather
 than executable HTML. Use the exact printed URL; this is not a remotely hosted service.
 
+When served by the task manager instead of `npm run inspect`, the same assets add a task
+list, a create form, pause/resume, follow-ups, the latest result and error, and the task's
+local workspace path. Task detail embeds the timeline, raw records, state/spend, and the
+internal task tree (the internal tab is labelled **Execution** to distinguish it from
+user-facing tasks). A stopped manager shows **MANAGER OFFLINE** and marks stored summaries
+stale rather than presenting them as fresh liveness. The standalone inspector stays
+read-only: no controls appear without the manager.
+
 Task status is **persisted state, not a heartbeat**: “running” can remain after a crash.
-Completed tasks retain outcomes, not a full checkpoint history; memory shows its current
-state, not a historical change log. This prototype understands pi-durable SQLite schema
+Completed tasks retain outcomes, not a full checkpoint history. This prototype understands pi-durable SQLite schema
 version 1 and rejects other versions. Task/request lists are currently unpaged; very large
 sessions may make polling slower. No editing, chat, runtime controls, or Dagger integration.
 
@@ -136,7 +174,7 @@ the saved context. The chat model defaults to `radius/deepseek-v4.1-flash`; over
 | Swappable | Pinned |
 |---|---|
 | Storage: `MemoryStorage`, SQLite, JSONL, Cloudflare Durable Object, or a Dagger cache volume | The Radius MCP endpoint (`RADIUS_MCP_URL` in `src/ask-agent.ts`) |
-| Model (`ASK_AGENT_MODEL`) and memory model (`ASK_AGENT_MEMORY_MODEL`) | The Radius tool names `tools_webSearch_run` / `tools_webFetch_run` |
+| Model (`ASK_AGENT_MODEL`) | The Radius tool names `tools_webSearch_run` / `tools_webFetch_run` |
 | Working directory and execution environment (`HarnessOptions.env`) | The Node image digest in `scripts/dagger.ts` |
 
 `src/ask-agent.ts` is the wiring; the web tools are a few lines each, and the durable machinery
@@ -172,11 +210,27 @@ MCP server:
 - **Replay proof:** `SIGKILL` mid-`web_fetch`, reopen the real SQLite storage in a child
   process, and assert the committed search is not repeated, the interrupted fetch is rerun, and
   the article is written once.
-- Memory: note rendering and its cap, `remember` deduplication, `recall` finding both a note and
-  a transcript hit, the keeper distilling without the model asking, consolidation retiring the
-  originals, and a note surviving a close/reopen of the SQLite state.
 - Request-ID/resume semantics, and the same crash-recovery test for a plain tool call.
+- Runner/ownership boundaries: pre-model failures create no database, a paused run reattaches
+  without a duplicate turn, and the root lock excludes a second process and survives `SIGKILL`.
+- Manager catalog and dispatch: idempotent creation/follow-ups, queue order, one active runner,
+  task isolation, pause/resume across restarts, bounded recovery, and terminal failures.
+- Manager API boundaries: loopback/same-origin/Host checks, JSON and size validation, unknown
+  fields, invalid IDs, and empty state for a task without a session database.
 - The Dagger pipeline shape.
 
 `npm run check` is a live Radius search and chat-model catalog smoke check; it does not verify
 model credentials.
+
+`npm run ui:check` is an opt-in browser acceptance check for the task UI. It drives a real
+headless Chrome with the `chrome-devtools` CLI from
+[chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) against an
+in-process manager on a faux model, and asserts the create → queue → run → complete flow, the
+result and workspace display, task-switching isolation, pause/resume, and the disconnected
+state. It is deliberately separate from `npm test`: it needs Chrome and downloads the pinned
+CLI (override with `CHROME_DEVTOOLS` or `CHROME_DEVTOOLS_MCP_VERSION`) on first run. Add
+`--watch` (`npm run ui:check -- --watch`, or `UI_WATCH=1`) to run it in a visible Chrome,
+pace the steps, and leave the window open until Ctrl-C so you can follow along.
+
+The committed `.pi/mcp.json` also registers the same server for interactive agent work, so an
+agent can open the manager UI and inspect it directly; trust the project to load it.
