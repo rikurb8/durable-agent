@@ -27,7 +27,17 @@ const VERSION = process.env.CHROME_DEVTOOLS_MCP_VERSION ?? "1.10.1";
 const COMMAND = process.env.CHROME_DEVTOOLS
 	? [process.env.CHROME_DEVTOOLS]
 	: ["npx", "-y", "-p", `chrome-devtools-mcp@${VERSION}`, "chrome-devtools"];
+/** `--watch` (or UI_WATCH=1) runs a visible Chrome, paces the steps, and stays open. */
+const watch = process.argv.includes("--watch") || process.env.UI_WATCH === "1";
 const log = (message: string) => process.stderr.write(`[ui] ${message}\n`);
+const pace = (ms = 1500) => (watch ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
+const waitSignal = () => new Promise<void>((resolve) => {
+	// An interval keeps the event loop alive while we wait for Ctrl-C.
+	const keep = setInterval(() => {}, 1 << 30);
+	const done = () => { clearInterval(keep); resolve(); };
+	process.once("SIGINT", done);
+	process.once("SIGTERM", done);
+});
 
 function run(args: string[], timeoutMs = 60_000): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -79,6 +89,7 @@ function blocked(gate: Promise<void>, message: string): FauxResponseFactory {
 }
 
 const passed: string[] = [];
+let cleanup: (() => Promise<void>) | undefined;
 function check(condition: unknown, message: string): void {
 	if (!condition) throw new Error(`UI check failed: ${message}`);
 	passed.push(message);
@@ -99,6 +110,11 @@ async function main(): Promise<void> {
 	await once(server, "listening");
 	const port = (server.address() as { port: number }).port;
 	const base = `http://127.0.0.1:${port}`;
+	cleanup = async () => {
+		await browser(["stop"]).catch(() => {});
+		await manager.close().catch(() => {});
+		await rm(work, { recursive: true, force: true }).catch(() => {});
+	};
 
 	// Task three is paused mid-stream, and its resumed attempt issues a new request.
 	const gate = { one: deferred(), two: deferred(), three: deferred(), paused: deferred() };
@@ -144,28 +160,35 @@ async function main(): Promise<void> {
 	}
 
 	try {
-		log("starting browser");
+		log(watch ? "starting visible Chrome" : "starting headless Chrome");
 		await browser(["stop"]);
+		// A headed daemon must be started before any tool call auto-starts a headless one.
+		if (watch) await browser(["start", "--headless=false"]);
 		const opened = JSON.parse(await browser(["new_page", `${base}/`, "--output-format=json"])) as { pages: { id: number; url: string }[] };
 		const pageId = opened.pages.find((page) => page.url.startsWith(base))?.id;
 		check(pageId !== undefined, "Chrome opened the manager UI");
 		if (pageId === undefined) throw new Error("no Chrome page for the manager UI");
 		check(await text(pageId, "mode") === "MANAGER", "manager mode is detected from GET /api/tasks");
+		await pace();
 
 		// Create, queue, run, complete — entirely through the UI.
 		log("create → queue → run → complete");
 		await createTask(pageId, "UI task one");
 		await waitFor(pageId, "UI task one", "Running");
+		await pace();
 		await createTask(pageId, "UI task two");
 		check(await statusOf(pageId, "UI task two") === "Queued", "the second task queues while one runner is active");
 		check(await statusOf(pageId, "UI task one") === "Running", "the first task shows Running from live runner ownership");
+		await pace();
 		gate.one.resolve();
 		await waitFor(pageId, "UI task one", "Completed");
 		await waitFor(pageId, "UI task two", "Running");
+		await pace();
 		gate.two.resolve();
 		await waitFor(pageId, "UI task two", "Completed");
 		check(await text(pageId, "task-result") === "Answer two.", "the selected task shows its result");
 		check(String(await text(pageId, "task-workspace")).startsWith("Local workspace: "), "the local workspace path is visible");
+		await pace();
 
 		// Switching tasks must never show another task's transcript or result.
 		log("switch tasks");
@@ -176,20 +199,25 @@ async function main(): Promise<void> {
 		check(timeline.includes("Answer one.") && !timeline.includes("Answer two."), "the timeline never mixes two tasks' transcripts");
 		const console = JSON.parse(await browser(["list_console_messages", String(pageId), "--types", "error", "--output-format=json"])) as { consoleMessages?: unknown[] };
 		check((console.consoleMessages?.length ?? 0) === 0, "the page logs no console errors");
+		await pace();
 
 		// Pause closes the active run; resume reattaches the same request.
 		log("pause and resume");
 		await createTask(pageId, "UI task three");
 		await waitFor(pageId, "UI task three", "Running");
+		await pace();
 		await click(pageId, "pause");
 		await waitFor(pageId, "UI task three", "Paused");
 		check(await evaluate(pageId, `return document.getElementById('pause').disabled;`) === true, "pause is disabled while paused");
+		await pace();
 		await click(pageId, "resume");
 		await waitFor(pageId, "UI task three", "Running");
 		check(await text(pageId, "task-result") !== "interrupted", "a paused stream never settles as a result");
+		await pace();
 		gate.three.resolve();
 		await waitFor(pageId, "UI task three", "Completed");
 		check(await text(pageId, "task-result") === "Answer three.", "a resumed task keeps the same request and completes");
+		await pace();
 
 		// A stopped manager must read as disconnected, not as live work.
 		log("stop manager");
@@ -197,10 +225,16 @@ async function main(): Promise<void> {
 		const deadline = Date.now() + 8000;
 		while (Date.now() < deadline && await text(pageId, "mode") !== "MANAGER OFFLINE") await new Promise((resolve) => setTimeout(resolve, 250));
 		check(await text(pageId, "mode") === "MANAGER OFFLINE", "a stopped manager is visibly disconnected");
-	} finally {
-		await browser(["stop"]).catch(() => {});
-		await manager.close().catch(() => {});
-		await rm(work, { recursive: true, force: true }).catch(() => {});
+		if (watch) {
+			log(`browser left open at ${base}/ — press Ctrl-C to close it`);
+			await waitSignal();
+		}
+	} catch (error) {
+		if (watch) {
+			log(`check failed; browser left open for inspection at ${base}/ — press Ctrl-C to close it`);
+			await waitSignal();
+		}
+		throw error;
 	}
 }
 
@@ -212,5 +246,6 @@ try {
 	console.error(error instanceof Error ? error.message : error);
 	process.exitCode = 1;
 }
+await cleanup?.();
 // The browser daemon can keep a pipe open; exit instead of waiting on it.
 process.exit(process.exitCode ?? 0);

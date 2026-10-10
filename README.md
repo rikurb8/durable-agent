@@ -228,7 +228,9 @@ headless Chrome with the `chrome-devtools` CLI from
 in-process manager on a faux model, and asserts the create → queue → run → complete flow, the
 result and workspace display, task-switching isolation, pause/resume, and the disconnected
 state. It is deliberately separate from `npm test`: it needs Chrome and downloads the pinned
-CLI (override with `CHROME_DEVTOOLS` or `CHROME_DEVTOOLS_MCP_VERSION`) on first run.
+CLI (override with `CHROME_DEVTOOLS` or `CHROME_DEVTOOLS_MCP_VERSION`) on first run. Add
+`--watch` (`npm run ui:check -- --watch`, or `UI_WATCH=1`) to run it in a visible Chrome,
+pace the steps, and leave the window open until Ctrl-C so you can follow along.
 
 The committed `.pi/mcp.json` also registers the same server for interactive agent work, so an
 agent can open the manager UI and inspect it directly; trust the project to load it.
