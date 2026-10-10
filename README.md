@@ -221,3 +221,14 @@ MCP server:
 
 `npm run check` is a live Radius search and chat-model catalog smoke check; it does not verify
 model credentials.
+
+`npm run ui:check` is an opt-in browser acceptance check for the task UI. It drives a real
+headless Chrome with the `chrome-devtools` CLI from
+[chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) against an
+in-process manager on a faux model, and asserts the create → queue → run → complete flow, the
+result and workspace display, task-switching isolation, pause/resume, and the disconnected
+state. It is deliberately separate from `npm test`: it needs Chrome and downloads the pinned
+CLI (override with `CHROME_DEVTOOLS` or `CHROME_DEVTOOLS_MCP_VERSION`) on first run.
+
+The committed `.pi/mcp.json` also registers the same server for interactive agent work, so an
+agent can open the manager UI and inspect it directly; trust the project to load it.

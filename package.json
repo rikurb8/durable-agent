@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node src/ask-agent.ts",
     "manage": "node src/manager.ts",
+    "ui:check": "node scripts/ui-check.ts",
     "inspect": "node src/inspector.ts",
     "check": "node scripts/check.ts",
     "dagger": "node scripts/dagger.ts",
