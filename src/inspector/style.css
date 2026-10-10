@@ -484,23 +484,6 @@ details pre {
   display: block;
   margin-top: 5px;
 }
-.note {
-  padding: 15px 17px;
-}
-.note p {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.7;
-}
-.note.retired {
-  opacity: .7;
-}
-.note-meta {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  align-items: center;
-}
 .load-older {
   display: block;
   margin: 0 auto 16px;

@@ -18,7 +18,7 @@ Set `RADIUS_API_KEY`.
 
 ## Repository layout
 
-- `src/` — agent CLI, session handling, memory, and logging verbosity.
+- `src/` — agent CLI, session handling, and logging verbosity.
 - `src/inspector.ts` and `src/inspector/` — read-only inspector server and browser assets.
 - `scripts/` — live connectivity check and Dagger runner.
 - `test/` — offline tests and the crash-recovery worker.
@@ -44,27 +44,11 @@ recovery instead of failing the turn, because it declares `replay: "safe"`. A to
 effects is not silently repeated; the model sees `interrupted` and decides what to do.
 `test/session.test.ts` proves the first case with a real `SIGKILL` against the real SQLite state.
 
-## Memory
-
-The agent keeps durable notes in a session document (`ask.memory`), rendered into the system
-prompt on every request, so a new turn — and a new process on the same `ASK_AGENT_STATE_DIR` —
-starts with them:
-
-- `remember(text, tags?, source?)` saves a note; identical notes are dropped.
-- `recall(query)` searches the notes **and the verbatim transcript**, including the parts
-  compaction has already summarized away, because pi-durable keeps every entry forever.
-- `forget(id)` deletes a note that turned out wrong.
-
-This is the cheap half of a memory tree: nothing is ever lost (the transcript is the log), and
-`recall` is exact lookup instead of guided descent.
-
-A background keeper (`ask.memory`, one per top-level conversation) maintains the notes without
-the model asking. It distills transcript the agent has moved past into notes, and once the notes
-pile up it consolidates them — retiring the originals rather than dropping them, so `recall` still
-reaches a note that consolidation merged away. It sleeps when there is nothing to do, is marked
-background so it never blocks a turn or an idle wait, and its watermark only advances on a
-successful model call, so a failed batch is retried instead of lost. `ASK_AGENT_MEMORY_MODEL`
-(`provider/model-id`) picks the model it uses; the default is `ASK_AGENT_MODEL`. See `src/memory.ts`.
+The custom memory tools and background keeper have been removed; conversation transcripts
+and normal context compaction remain. Existing databases are not rewritten: old notes and
+keeper records remain inspectable under State/Tasks, but the keeper no longer runs.
+Resuming a turn interrupted inside a removed memory tool is not supported; use a new
+request ID for a follow-up instead.
 
 ## Read-only companion UI
 
@@ -85,8 +69,6 @@ It works alongside the CLI and continues working after the CLI stops.
 - **Inspect panel:** raw records, linked task owners/children, current checkpoints,
   terminal outcomes, and request/input/answer links.
 - **Tasks:** live and completed task records, including background work.
-- **Memory:** active/retired session notes, sources/tags, keeper state, and its
-  processed-through entry. Older model-visible memory appears in recorded prompt changes.
 - **State:** reconstructed documents, including usage, agent settings, inbox, and
   committed generation/tool partial output. Conversation spend (total cost and tokens,
   split by model and tool) is summarized above the document list.
@@ -96,8 +78,7 @@ The UI polls once per second and never writes agent state. It binds only to
 than executable HTML. Use the exact printed URL; this is not a remotely hosted service.
 
 Task status is **persisted state, not a heartbeat**: “running” can remain after a crash.
-Completed tasks retain outcomes, not a full checkpoint history; memory shows its current
-state, not a historical change log. This prototype understands pi-durable SQLite schema
+Completed tasks retain outcomes, not a full checkpoint history. This prototype understands pi-durable SQLite schema
 version 1 and rejects other versions. Task/request lists are currently unpaged; very large
 sessions may make polling slower. No editing, chat, runtime controls, or Dagger integration.
 
@@ -136,7 +117,7 @@ the saved context. The chat model defaults to `radius/deepseek-v4.1-flash`; over
 | Swappable | Pinned |
 |---|---|
 | Storage: `MemoryStorage`, SQLite, JSONL, Cloudflare Durable Object, or a Dagger cache volume | The Radius MCP endpoint (`RADIUS_MCP_URL` in `src/ask-agent.ts`) |
-| Model (`ASK_AGENT_MODEL`) and memory model (`ASK_AGENT_MEMORY_MODEL`) | The Radius tool names `tools_webSearch_run` / `tools_webFetch_run` |
+| Model (`ASK_AGENT_MODEL`) | The Radius tool names `tools_webSearch_run` / `tools_webFetch_run` |
 | Working directory and execution environment (`HarnessOptions.env`) | The Node image digest in `scripts/dagger.ts` |
 
 `src/ask-agent.ts` is the wiring; the web tools are a few lines each, and the durable machinery
@@ -172,9 +153,6 @@ MCP server:
 - **Replay proof:** `SIGKILL` mid-`web_fetch`, reopen the real SQLite storage in a child
   process, and assert the committed search is not repeated, the interrupted fetch is rerun, and
   the article is written once.
-- Memory: note rendering and its cap, `remember` deduplication, `recall` finding both a note and
-  a transcript hit, the keeper distilling without the model asking, consolidation retiring the
-  originals, and a note surviving a close/reopen of the SQLite state.
 - Request-ID/resume semantics, and the same crash-recovery test for a plain tool call.
 - The Dagger pipeline shape.
 

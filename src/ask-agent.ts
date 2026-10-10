@@ -29,7 +29,6 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { McpClient, StreamableHttpTransport, toLlmContent } from "@earendil-works/pi-mcp";
-import { memoryExtension, memoryKeeper } from "./memory.ts";
 import { parseRequest, selectSubmission, type ResearchRequest } from "./session.ts";
 import { DEBUG, VERBOSITY, VERBOSE } from "./verbosity.ts";
 
@@ -147,7 +146,6 @@ async function run(request: ResearchRequest) {
 		const registry = createRegistry();
 		registry.install(CodingTools);
 		registry.install(askExtension(client));
-		registry.install(memoryExtension());
 		const models = await ModelRuntime.create();
 		const stateDir = process.env.ASK_AGENT_STATE_DIR ?? join(import.meta.dirname, "..", ".ask-agent");
 		const storage = await openNodeSqliteStorage(join(stateDir, "session.sqlite"));
@@ -166,8 +164,6 @@ async function run(request: ResearchRequest) {
 			harness = await Harness.open(storage, {
 				models, registry,
 				env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? process.cwd() }),
-				// The keeper distills and consolidates memory in the background; it never blocks a turn.
-				conversationCreated: memoryKeeper({ model: MODEL }),
 			}, BACKGROUND_CONTEXT);
 			const [provider, ...rest] = MODEL.split("/");
 			const root = await harness.root(BACKGROUND_CONTEXT, {

@@ -121,7 +121,6 @@ function renderContent() {
     $('content').replaceChildren();
     if (state.tab === 'timeline') renderTimeline();
     if (state.tab === 'tasks') renderTasks();
-    if (state.tab === 'memory') renderMemory();
     if (state.tab === 'state') renderState();
   });
 }
@@ -185,33 +184,6 @@ function renderTasks() {
 function stat(value, label) {
   const node = el('div', 'stat'); node.append(el('strong', '', value), el('span', '', label)); return node;
 }
-function renderMemory() {
-  const content = $('content');
-  const memory = documentValue('ask.memory');
-  content.append(el('div', 'notice', 'Memory is shared across this session. These are the current notes, not a historical snapshot. Recorded system prompt changes in the timeline show what was supplied to past turns.'));
-  if (!memory) { content.append(empty('No memory document has been saved in this session yet.')); return; }
-  const stats = el('div', 'stats');
-  stats.append(stat(memory.notes?.length ?? 0, 'active notes'), stat(memory.retired?.length ?? 0, 'retired notes'));
-  content.append(stats);
-  if (memory.distilledThrough) content.append(button(`Keeper processed through entry #${memory.distilledThrough} ↗`, () => jump(memory.distilledThrough), 'list-button'));
-  else content.append(el('p', 'muted', 'Keeper has not advanced its transcript watermark.'));
-  if (memory.consolidatedAt) content.append(el('p', 'meta', `Last consolidation: ${time(memory.consolidatedAt)}`));
-  for (const task of state.data.tasks.filter((task) => task.kind === 'ask.memory' && task.conversationId === state.conversation)) content.append(taskButton(task));
-  for (const [label, notes] of [['Active notes', memory.notes ?? []], ['Retired notes', memory.retired ?? []]]) {
-    content.append(el('h3', '', label));
-    if (!notes.length) content.append(el('p', 'muted', 'None yet.'));
-    for (const note of [...notes].reverse()) {
-      const card = el('article', `entry note${label === 'Retired notes' ? ' retired' : ''}`);
-      selectable(card, 'note', note);
-      const meta = el('div', 'note-meta');
-      meta.append(button(`#${note.id} ↗`, () => select('note', note), 'subtle'), el('span', 'meta', time(note.at)));
-      for (const tag of note.tags ?? []) meta.append(badge(tag));
-      card.append(meta, el('p', '', note.text));
-      if (note.source) card.append(el('p', 'meta', `Source: ${note.source}`));
-      content.append(card);
-    }
-  }
-}
 function documentRecord(kind) { return state.data?.documents.find((doc) => doc.record.kind === kind); }
 function renderState() {
   const content = $('content');
@@ -241,7 +213,7 @@ function renderState() {
 function renderDetail() {
   const detail = $('detail');
   if (!state.selected) {
-    detail.replaceChildren(empty('Select an entry, task, or note to inspect its persisted details and connections.'));
+    detail.replaceChildren(empty('Select an entry, task, request, or document to inspect its persisted details and connections.'));
     return;
   }
   preserve(detail, () => {
@@ -250,10 +222,6 @@ function renderDetail() {
     if (type === 'task') value = state.data.tasks.find((task) => task.id === value.id) ?? value;
     if (type === 'document') value = state.data.documents.find((doc) => doc.record.id === value.record.id) ?? value;
     if (type === 'request') value = state.data.submissions.find((item) => item.id === value.id) ?? value;
-    if (type === 'note') {
-      const memory = documentValue('ask.memory');
-      value = [...(memory?.notes ?? []), ...(memory?.retired ?? [])].find((note) => note.id === value.id) ?? value;
-    }
     detail.append(el('h2', '', `${type === 'document' ? value.record.kind : value.kind ?? type} #${value.id ?? value.record?.id}`));
     if (type === 'task') {
       detail.append(badge(status(value)));
